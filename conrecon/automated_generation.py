@@ -69,14 +69,14 @@ def generate_controllable_system(
 def generate_state_space_systems(
     n, num_inputs, num_outputs, state_size, amount_systems
 ):
-    print(f"Generating {amount_systems} systems")
-    print("Generatinng Matrices A...")
+    # print(f"Generating {amount_systems} systems")
+    # print("Generatinng Matrices A...")
     Amats = generate_matrix_A(amount_systems, state_size)
-    print("Generatinng Matrices B...")
+    # print("Generatinng Matrices B...")
     Bmats = generate_controllable_system(Amats, num_inputs)
-    print("Generatinng Matrices C...")
+    # print("Generatinng Matrices C...")
     Cmats = [np.random.rand(num_outputs, state_size) for i in range(amount_systems)]
-    print("Generatinng Matrices D...")
+    # print("Generatinng Matrices D...")
     Dmats = [np.zeros((num_outputs, num_inputs)) for _ in range(amount_systems)]
     return Amats, Bmats, Cmats, Dmats
 
@@ -99,14 +99,14 @@ if __name__ == "__main__":
 
         t = np.linspace(0, 10, 101)
         u = np.zeros((args.num_inputs, len(t)))
-        print(f"T is of shape {t.shape} with length {len(t)}")
+        # print(f"T is of shape {t.shape} with length {len(t)}")
         # u[:, int(len(t) / 4)] = 1
         init_cond = np.random.uniform(0, 1, sys.nstates)
         # Lets run the simulation and see what happens
         timepts = np.linspace(0, 10, 101)
         response = ct.input_output_response(sys, timepts, u, X0=init_cond)
-        print(f"Generation {i} response: {response.outputs}")
+        # print(f"Generation {i} response: {response.outputs}")
         # Lets plot the response
         plt.plot(timepts, response.outputs.squeeze())
         plt.show()
-    print(f"Generating {args.num_of_gens} generations")
+    # print(f"Generating {args.num_of_gens} generations")
