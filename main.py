@@ -1,4 +1,6 @@
 import argparse
+import datetime
+import os
 from typing import Generator, Iterable, Tuple
 
 import control as ct
@@ -7,7 +9,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import tqdm
-from conrecon.automated_generation import generate_state_space_systems
 from rich import inspect
 from rich.console import Console
 from rich.layout import Layout
@@ -16,6 +17,9 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.text import Text
+from torch.nn import functional as F
+
+from conrecon.automated_generation import generate_state_space_systems
 
 console = Console()
 
@@ -52,7 +56,7 @@ class Plot:
         return Text(self.render())
 
 
-def plot_functions(outputs: np.ndarray, estimated_outputs: np.ndarray):
+def plot_functions(outputs: np.ndarray, estimated_outputs: np.ndarray, save_path: str):
     num_outputs = outputs.shape[0]
     assert num_outputs <= 4, "Can only plot up to 4 outputs"
     fig, ax = plt.subplots(num_outputs, 2, figsize=(num_outputs * 6, 6))
@@ -75,38 +79,52 @@ def plot_functions(outputs: np.ndarray, estimated_outputs: np.ndarray):
         ax[i, 1].set_ylabel("Error")
         ax[i, 1].set_title(f"Output {i+1}")
 
-    plt.show()
+    # Rather than showing them save them to a file
+    # plt.show()
+    plt.savefig(save_path)
 
 
 def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     # State stuff here
     ap.add_argument("-n", "--num_batches", default=64, type=int)
-    ap.add_argument("-b", "--batch_size", default=10, type=int)
+    ap.add_argument("-b", "--batch_size", default=32, type=int)
     ap.add_argument("-e", "--eval_size", default=4, help="How many systems to generate")
     # Control stuff here
     ap.add_argument(
-        "-t", "--time_steps", default=100, help="How many systems to generate"
+        "-t", "--time_steps", default=12, help="How many systems to generate"
     )
     ap.add_argument(
         "-s", "--state_size", default=6, help="Dimensionality of the state."
     )
+    ap.add_argument("-i", "--input_dim", default=3, help="Dimensionality of the input.")
     ap.add_argument(
         "-g", "--num_of_gens", default=6, help="How many systems to generate"
     )
     ap.add_argument(
-        "-i", "--num_inputs", default=3, help="Dimensionality of the input."
-    )
-    ap.add_argument(
         "-o", "--num_outputs", default=1, help="Dimensionality of the output."
     )
+    ap.add_argument(
+        "--save_destination",
+        default="./figures/",
+        help="Where to save the outputs",
+    )
     ap.add_argument("--no-autoindent")
-    # manage ipython indent argument
-    return ap.parse_args()
+
+    args = ap.parse_args()
+
+    if not os.path.exists(args.save_destination):
+        os.makedirs(args.save_destination)
+    return args
+    # Sanity check
 
 
 def get_n_sims(
-    Amat: np.ndarray, Bmat: np.ndarray, Cmat: np.ndarray, time_length: int
+    Amat: np.ndarray,
+    Bmat: np.ndarray,
+    Cmat: np.ndarray,
+    time_length: int,
+    input_dim: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Given the matrices, get states and outputs
@@ -114,7 +132,7 @@ def get_n_sims(
 
     sys = ct.ss(Amat, Bmat, Cmat, 0)
     t = np.linspace(0, 10, time_length)
-    u = np.zeros((args.num_inputs, len(t)))
+    u = np.zeros((input_dim, len(t)))
     # u[:, int(len(t) / 4)] = 1
     # TODO: think about this initial condition
     init_cond = np.random.uniform(0, 1, sys.nstates)
@@ -127,12 +145,12 @@ def get_n_sims(
 
 
 def single_train_batch(
-    state_size: int, num_inputs: int, num_outputs: int, time_steps: int, batch_size: int
+    state_size: int, input_dim: int, num_outputs: int, time_steps: int, batch_size: int
 ):
     # Let me start with an RNN
     Amats, Bmats, Cmats, Dmats = generate_state_space_systems(
         state_size,
-        num_inputs,
+        input_dim,
         num_outputs,
         state_size,
         batch_size,
@@ -153,7 +171,7 @@ def single_train_batch(
     )
 
     for i in range(batch_size):
-        results = get_n_sims(Amats[i], Bmats[i], Cmats[i], time_steps)
+        results = get_n_sims(Amats[i], Bmats[i], Cmats[i], time_steps, input_dim)
         hidden_truths[i, :, :] = torch.from_numpy(results[0])
         system_outputs[i, :, :] = torch.from_numpy(results[1])
 
@@ -174,7 +192,7 @@ def train(
 
             hidden_truths, system_outputs = single_train_batch(
                 args.state_size,
-                args.num_inputs,
+                args.input_dim,
                 args.num_outputs,
                 args.time_steps,
                 args.batch_size,
@@ -184,6 +202,7 @@ def train(
             model.zero_grad()
             hidden_truths = hidden_truths.to(device)
             system_outputs = system_outputs.to(device)
+            # inspect(hidden_truths)
             outputs, hidden_states = model(hidden_truths)
             # CHECK: Loss is being performed in the right dimensions
             # Log pretty the shapes using rich
@@ -198,7 +217,7 @@ def train(
         model.eval()
         hidden_truths, system_outputs = single_train_batch(
             args.state_size,
-            args.num_inputs,
+            args.input_dim,
             args.num_outputs,
             args.time_steps,
             args.batch_size,
@@ -210,10 +229,10 @@ def train(
         mean_eval_loss = loss.item()
 
         # DEBUG:
-        # Show me wha the function looks like and what we learned
         plot_functions(
             system_outputs.cpu().detach().numpy()[:3, :, :],
             outputs.cpu().detach().numpy()[:3, :, :],
+            save_path=f"{args.save_destination}/plot_{i}.png",
         )
 
         yield i, mean_train_loss, mean_eval_loss
@@ -256,15 +275,6 @@ def train_w_metrics(model: nn.Module, args: argparse.Namespace):
             )
 
             live.update(table)
-
-    # Plot the loss curve
-    fig, ax = plt.subplots()
-    ax.plot(tlosses, label="Training Loss")
-    ax.plot(vlosses, label="Validation Loss")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss")
-    ax.legend()
-    plt.show()
 
 
 class RecoveryNet(nn.Module):
