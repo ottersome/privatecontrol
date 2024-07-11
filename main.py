@@ -278,17 +278,41 @@ def train_w_metrics(model: nn.Module, args: argparse.Namespace):
 
 
 class RecoveryNet(nn.Module):
-    def __init__(self, state_size, num_outputs):
+    def __init__(self, input_size, state_size, num_outputs, time_steps):
         super().__init__()
-        self.rnn = torch.nn.RNN(state_size, state_size, batch_first=True)
+        self.mean = torch.zeros(input_size, time_steps)
+        self.variance = torch.zeros(input_size, time_steps)
+        self.rnn = torch.nn.GRU(input_size, state_size, batch_first=True)
         # Final output layer
         self.output_layer = torch.nn.Linear(state_size, num_outputs)
+        self.count = 0
 
     def forward(self, x):
-        # x is a tensor of shape (batch_size, time_steps, state_size)
-        # We want to get a tensor of shape (batch_size, time_steps, num_outputs)
-        x, hidden = self.rnn(x)
-        return self.output_layer(x), hidden
+        # Normalize x
+        self.update(x)
+        inspect(self.mean.shape)
+        inspect(self.variance.shape)
+        inspect(x.shape)
+        norm_x = (x - self.mean) / (self.variance + 1e-8).sqrt()
+        x, hidden = self.rnn(norm_x)
+        return self.output_layer(F.relu(x)), hidden
+
+    def update(self, x):
+        self.count += 1
+        batch_mean = x.mean(dim=0)
+        batch_var = x.var(dim=0)
+        if self.count == 1:
+            self.mean = batch_mean
+        else:
+            old_mean = self.mean
+            self.mean = (old_mean * (self.count - 1) + batch_mean) / self.count
+            delta = batch_mean - old_mean
+            self.variance = (self.variance * (self.count - 1) + batch_var) / self.count
+
+            # self.variance = (
+            #     self.variance * (self.count - 1)
+            #     + (x - old_mean - delta).pow(2).sum(dim=0)
+            # ) / self.count
 
 
 if __name__ == "__main__":
@@ -296,12 +320,13 @@ if __name__ == "__main__":
     args = argsies()
     # Get out matrices
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = RecoveryNet(
+        args.state_size, args.state_size, args.num_outputs, args.time_steps
+    ).to(device)
 
-    model = RecoveryNet(args.state_size, args.num_outputs).to(device)
     criterion = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
     ct.use_fbs_defaults()  # Use settings to match FBS
-    outtie = tqdm.tqdm(total=args.num_batches)
 
     train_w_metrics(model, args)
