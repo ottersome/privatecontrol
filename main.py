@@ -174,7 +174,7 @@ def get_n_sims(
     return states, outputs
 
 
-def single_train_batch(
+def batch_wise_datagen(
     state_size: int, input_dim: int, num_outputs: int, time_steps: int, batch_size: int
 ):
     # Let me start with an RNN
@@ -189,14 +189,14 @@ def single_train_batch(
     # Generate the simulations
     hidden_truths = torch.zeros(
         batch_size,
-        time_steps,
         state_size,
+        time_steps,
         device=device,
     )
     system_outputs = torch.zeros(
         batch_size,
-        time_steps,
         num_outputs,
+        time_steps,
         device=device,
     )
 
