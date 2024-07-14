@@ -218,32 +218,34 @@ def train(
     for i in range(args.num_batches):
         tlosses = []
         model.train()
-        for j in range(args.batch_size):
 
-            hidden_truths, system_outputs = single_train_batch(
-                args.state_size,
-                args.input_dim,
-                args.num_outputs,
-                args.time_steps,
-                args.batch_size,
-            )
-            # Train
-            model.train()
-            model.zero_grad()
-            hidden_truths = hidden_truths.to(device)
-            system_outputs = system_outputs.to(device)
-            # inspect(hidden_truths)
-            outputs, hidden_states = model(hidden_truths)
-            # CHECK: Loss is being performed in the right dimensions
-            # Log pretty the shapes using rich
-            loss = criterion(outputs, system_outputs)
-            tlosses.append(loss.mean().item())
-            loss.backward()
-            optimizer.step()
+        hidden_truths, system_outputs = batch_wise_datagen(
+            args.state_size,
+            args.input_dim,
+            args.num_outputs,
+            args.time_steps,
+            args.batch_size,
+        )
+        model.zero_grad()
+        hidden_truths = hidden_truths.to(device)
+        system_outputs = system_outputs.to(device)
+        # inspect(hidden_truths)
 
-        ## Evaluate the loss on a single round
+        # Let me inspect hidden outputs
+        outputs, hidden_states = model(hidden_truths)
+        inspect(outputs.shape)
+        # CHECK: Loss i performed in the right dimensions
+        # Log pretty the shapes using rich
+        transposed_system_outputs = system_outputs.transpose(1, 2)
+
+        loss = criterion(outputs, transposed_system_outputs)
+        tlosses.append(loss.mean().item())
+        loss.backward()
+        optimizer.step()
         mean_train_loss = np.mean(tlosses).item()
         tlosses.append(mean_train_loss)
+
+        ## Evaluation Loop
         model.eval()
         hidden_truths, system_outputs = single_train_batch(
             args.state_size,
