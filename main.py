@@ -28,29 +28,36 @@ class Plot:
     def __init__(self, width, height):
         self.width = width
         self.height = height
-        self.series = []
+        self.metric = []
+        self.logger = create_logger("plot")
 
-    def add_series(self, data, label=None, color="white"):
-        self.series.append((data, label, color))
+    def add_measurement(self, data):
+        self.metric.append(data)
 
     def render(self):
-        max_value = max([max(s[0]) for s in self.series] + [1])
-        min_value = min([min(s[0]) for s in self.series] + [0])
 
-        lines = []
-        for y in range(self.height):
-            value = max_value - y * (max_value - min_value) / (self.height - 1)
-            line = []
-            for x in range(self.width):
-                index = int(x / self.width * (len(self.series[0][0]) - 1))
-                char = " "
-                for series, label, color in self.series:
-                    if series[index] >= value:
-                        char = "█"
-                        break
-                line.append(char)
-            lines.append("".join(line))
-        return "\n".join(lines)
+        # Get terminal width
+        term_width = shutil.get_terminal_size().columns
+        width = min(len(self.metric), term_width)
+
+        lines = [[" "] * width for _ in range(self.height)]
+        if len(self.metric) <= 1:
+            return "\n".join(["".join(l) for l in lines])
+        max_value = max(self.metric)
+        min_value = min(self.metric)
+
+        # for j, value in enumerate(self.metric):
+        for j in range(width):
+            metric_idx = int(j * (len(self.metric) - 1) / (width - 1))
+            value = self.metric[metric_idx]
+            normed_thresh = int(value * (self.height - 0) / (max_value - min_value))
+            for i in range(self.height):
+                ai = self.height - i - 1
+                if i <= normed_thresh:
+                    lines[ai][j] = "█"
+
+        string_dump = "\n".join(["".join(l) for l in lines])
+        return string_dump
 
     def __rich__(self):
         return Text(self.render())
