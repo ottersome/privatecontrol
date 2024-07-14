@@ -1,5 +1,5 @@
 import argparse
-import datetime
+import logging
 import os
 import shutil
 from typing import Generator, Iterable, List, Tuple
@@ -19,37 +19,13 @@ from rich.text import Text
 from torch.nn import functional as F
 
 from conrecon.automated_generation import generate_state_space_systems
+from conrecon.models import RecoveryNet, RecoveryTrans, create_logger
 
 console = Console()
 
 
-def create_logger(name: str) -> logging.Logger:
-    # Check if .log folder exists if ot crea
-    if not os.path.exists(f"logs/"):
-        os.makedirs(f"logs/", exist_ok=True)
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
-    # create file handler which logs even debug messages
-    fh = logging.FileHandler(f"logs/{name}.log", mode="w")
-    fh.setLevel(logging.DEBUG)
-    # create console handler with a higher log level
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
-    # create formatter and add it to the handlers
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    fh.setFormatter(formatter)
-    ch.setFormatter(formatter)
-    # add the handlers to the logger
-    logger.addHandler(fh)
-    logger.addHandler(ch)
-    return logger
-
-
 class Plot:
     def __init__(self, width, height):
-        self.width = width
         self.height = height
         self.metric = []
         self.logger = create_logger("plot")
@@ -112,6 +88,7 @@ def plot_functions(outputs: np.ndarray, estimated_outputs: np.ndarray, save_path
     # Rather than showing them save them to a file
     # plt.show()
     plt.savefig(save_path)
+    plt.close()
 
 
 def argsies() -> argparse.Namespace:
@@ -169,8 +146,10 @@ def get_n_sims(
     # Lets run the simulation and see what happens
     timepts = np.linspace(0, 10, time_length)
     response = ct.input_output_response(sys, timepts, u, X0=init_cond)  # type: ignore
-    outputs = response.outputs.T
-    states = response.states.T
+    outputs = response.outputs
+    states = response.states
+    # inspect(outputs.shape)
+    # inspect(states.shape)
     return states, outputs
 
 
@@ -209,15 +188,13 @@ def batch_wise_datagen(
 
 
 def train(
-    model: nn.Module, args: argparse.Namespace
+    model: nn.Module, args: argparse.Namespace, device: torch.device
 ) -> Generator[Tuple[int, float, float], None, None]:
     """
     Train the RNN
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.train()
     for i in range(args.num_batches):
-        tlosses = []
-        model.train()
 
         hidden_truths, system_outputs = batch_wise_datagen(
             args.state_size,
@@ -232,22 +209,45 @@ def train(
         # inspect(hidden_truths)
 
         # Let me inspect hidden outputs
+        logger.debug(
+            f"Systems hidden max and min: {hidden_truths.max()} and {hidden_truths.min()}"
+        )
+        logger.debug(f"Hidden Truths ({hidden_truths.shape}): {hidden_truths}")
+        nan_idx = torch.where(torch.isnan(hidden_truths))
+        logger.debug(f"Hidden Truths Nan idx: {nan_idx}")
         outputs, hidden_states = model(hidden_truths)
-        inspect(outputs.shape)
+        nan_idx = torch.where(torch.isnan(outputs))
+        logger.debug(f"Outputs ({outputs.shape}): {outputs}")
+        logger.debug(f"Output Nan Nan idx: {nan_idx}")
         # CHECK: Loss i performed in the right dimensions
         # Log pretty the shapes using rich
         transposed_system_outputs = system_outputs.transpose(1, 2)
+        logger.debug(f"Shape of system_outputs: {system_outputs.shape}")
 
         loss = criterion(outputs, transposed_system_outputs)
-        tlosses.append(loss.mean().item())
         loss.backward()
+
+        grad_min = float("inf")
+        grad_max = float("-inf")
+        for param in model.parameters():
+            if param.grad is not None:
+                grad_min = min(grad_min, param.grad.min().item())
+                grad_max = max(grad_max, param.grad.max().item())
+        print(f"Gradient Min: {grad_min}")
+        print(f"Gradient Max: {grad_max}")
+
+        # Get gradients
+        logger.debug(f"Gradients: min and max {grad_min} and {grad_max}")
         optimizer.step()
-        mean_train_loss = np.mean(tlosses).item()
-        tlosses.append(mean_train_loss)
+        tloss = loss.mean().detach().cpu().item()
+        logger.debug(f"Loss: {tloss}")
+        # tlosses.append(loss.item())
+        # mean_train_loss = np.mean(tlosses).item()
+        # tlosses.append(mean_train_loss)
 
         ## Evaluation Loop
         model.eval()
-        hidden_truths, system_outputs = single_train_batch(
+        hidden_truths, system_outputs = batch_wise_datagen(
             args.state_size,
             args.input_dim,
             args.num_outputs,
@@ -257,8 +257,10 @@ def train(
 
         outputs, hidden_states = model(hidden_truths)
 
-        loss = criterion(outputs, system_outputs)
-        mean_eval_loss = loss.item()
+        transposed_system_outputs = system_outputs.transpose(1, 2)
+        loss = criterion(outputs, transposed_system_outputs)
+        vloss = loss.detach().cpu().item()
+        mean_eval_loss = loss.mean().item()
 
         # DEBUG:
         plot_functions(
@@ -267,49 +269,81 @@ def train(
             save_path=f"{args.save_destination}/plot_{i}.png",
         )
 
-        yield i, mean_train_loss, mean_eval_loss
+        yield i, tloss, vloss
 
 
-def train_w_metrics(model: nn.Module, args: argparse.Namespace):
+class MyLayout:
+    def __init__(self, epoch: int, tlosses: List[float], vlosses: List[float]):
+        self.progress = Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            "[progress.percentage]{task.percentage:>3.0f}%",
+            TimeRemainingColumn(),
+        )
+        self.task = self.progress.add_task("[cyan]Training..", total=args.num_batches)
+        self.layout = Layout()
+        self.table = Table(title=f"Epoch {epoch}")
+        self.table.add_column("Metric")
+        self.table.add_column("Value")
+        if len(tlosses) > 1:
+            self.table.add_row("Training Loss", f"{tlosses[-1]:.3f}")
+            self.table.add_row("Validation Loss", f"{vlosses[-1]:.3f}")
 
-    progress = Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        "[progress.percentage]{task.percentage:>3.0f}%",
-        TimeRemainingColumn(),
-    )
-    task = progress.add_task("[cyan]Training..", total=args.num_batches)
+        self.plot = Plot(width=60, height=20)
+        # self.plot.add_series(tlosses, label="Loss", color="red")
+
+        self.layout.split(
+            Layout(self.progress, name="progress", size=3),
+            # Layout(Panel(plot, title="Loss Curve"), name="plot"),
+            Layout(self.table, name="table", size=10),
+            Layout(self.plot, name="plot", size=20),
+        )
+
+    def update(self, epoch: int, tloss: float, vloss: float):
+        self.progress.update(
+            self.task, advance=1, description=f"Epoch {epoch+1}/{args.num_batches}"
+        )
+        # Clear the table from rows
+        new_table = Table(title=f"Epoch {epoch}")
+        new_table.add_column("Metric")
+        new_table.add_column("Value")
+        new_table.add_row("Training Loss", f"{tloss:.3f}")
+        new_table.add_row("Validation Loss", f"{vloss:.3f}")
+        self.plot.add_measurement(tloss)
+        self.layout["table"].update(new_table)
+
+
+def train_w_metrics(model: nn.Module, args: argparse.Namespace, device: torch.device):
 
     tlosses = []
     vlosses = []
-    with Live(console=console, refresh_per_second=10) as live:
-        for epoch, tloss, vloss in train(model, args):
-            progress.update(
-                task, advance=1, description=f"Epoch {epoch+1}/{args.num_batches}"
-            )
-            table = Table(title=f"Epoch {epoch}")
-            table.add_column("Metric")
-            table.add_column("Value")
-            table.add_row("Training Loss", f"{tloss:.3f}")
-            table.add_row("Validation Loss", f"{vloss:.3f}")
-
+    # layout, progress = make_layout(0, tlosses, vlosses)
+    layout = MyLayout(0, tlosses, vlosses)
+    with Live(layout.layout, console=console, refresh_per_second=10) as live:
+        for epoch, tloss, vloss in train(model, args, device):
             tlosses.append(tloss)
             vlosses.append(vloss)
+            layout.update(epoch, tloss, vloss)
 
-            plot = Plot(width=60, height=20)
-            plot.add_series(tlosses, label="Loss", color="red")
+    # Plot the losses after the episode finishes
+    t_diff_in_order = np.max(tlosses) - np.min(tlosses) > 1e1
+    v_diff_in_order = np.max(vlosses) - np.min(vlosses) > 1e1
+    fig, axs = plt.subplots(1, 2)
+    axs[0].plot(tlosses)
+    if t_diff_in_order:
+        axs[0].set_yscale("log")
+    axs[0].set_title("Training Loss")
+    axs[1].plot(vlosses)
+    if v_diff_in_order:
+        axs[1].set_yscale("log")
+    axs[1].set_title("Validation Loss")
+    plt.show()
 
-            layout = Layout()
-            layout.split(
-                Layout(progress, name="progress"),
-                Layout(Panel(plot, title="Loss Curve"), name="plot"),
-                Layout(table, name="table"),
-            )
-
-            live.update(table)
+    plt.show()
 
 
 class RecoveryNet(nn.Module):
+
     def __init__(self, input_size, state_size, num_outputs, time_steps):
         super().__init__()
         self.mean = torch.zeros(input_size, time_steps)
@@ -318,16 +352,18 @@ class RecoveryNet(nn.Module):
         # Final output layer
         self.output_layer = torch.nn.Linear(state_size, num_outputs)
         self.count = 0
+        self.batch_norm = torch.nn.BatchNorm1d(num_features=input_size)
 
     def forward(self, x):
         # Normalize x
-        self.update(x)
-        inspect(self.mean.shape)
-        inspect(self.variance.shape)
-        inspect(x.shape)
-        norm_x = (x - self.mean) / (self.variance + 1e-8).sqrt()
-        x, hidden = self.rnn(norm_x)
-        return self.output_layer(F.relu(x)), hidden
+        # self.update(x)
+        # normed_x = self.batch_norm(x)
+        # norm_x = (x - self.mean) / (self.variance + 1e-8).sqrt()
+        transposed_x = x.transpose(1, 2)
+        logger.debug(f"Tranposed x looks like {transposed_x}")
+        rnnout, hidden = self.rnn(transposed_x)
+        logger.debug(f"RNN output looks like: {rnnout}")
+        return self.output_layer(F.relu(rnnout)), hidden
 
     def update(self, x):
         self.count += 1
@@ -351,9 +387,18 @@ if __name__ == "__main__":
 
     args = argsies()
     # Get out matrices
+    logger = create_logger("__main__")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = RecoveryNet(
-        args.state_size, args.state_size, args.num_outputs, args.time_steps
+    device = torch.device("mps") if torch.backends.mps.is_available() else device
+    # model = RecoveryNet(
+    #     args.state_size, args.state_size, args.num_outputs, args.time_steps
+    model = torch.nn.Transformer(
+        d_model=args.state_size,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=128,
+        dropout=0.1,
     ).to(device)
 
     criterion = torch.nn.MSELoss()
@@ -361,4 +406,4 @@ if __name__ == "__main__":
 
     ct.use_fbs_defaults()  # Use settings to match FBS
 
-    train_w_metrics(model, args)
+    train_w_metrics(model, args, device)
