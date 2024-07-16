@@ -318,40 +318,6 @@ class RecoveryNet(nn.Module):
             # ) / self.count
 
 
-class TModel(nn.Module):
-    def __init__(
-        self,
-        d_model,
-        output_size,
-        nhead,
-        num_encoder_layers,
-        num_decoder_layers,
-        dim_feedforward,
-        dropout,
-        memory_casual=False,
-    ) -> None:
-        super().__init__()
-        self.memory_casual = memory_casual
-        self.decoder_projection = nn.Linear(1, d_model)
-        self.transformer = nn.Transformer(
-            d_model=d_model,
-            nhead=nhead,
-            num_encoder_layers=num_encoder_layers,
-            num_decoder_layers=num_decoder_layers,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            batch_first=True,
-        )
-        self.final_layer = nn.Linear(d_model, output_size)
-
-    def forward(self, src, tgt):
-        transd_tgt = self.decoder_projection(tgt)
-        transy = self.transformer(src, transd_tgt)
-        return self.final_layer(transy)
-
-        # return self.transformer(src, tgt, memory_casual=self.memory_casual)
-
-
 if __name__ == "__main__":
 
     args = argsies()

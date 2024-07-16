@@ -14,6 +14,51 @@ class RecoveryTrans(nn.Module):
         pass
 
 
+class SimpleModel(nn.Module):
+    def __init__(self, input_size, state_size, num_outputs, time_steps):
+        super().__init__()
+        # Just do two layers of linear and relu
+        self.layer1 = nn.Linear(input_size, state_size)
+        self.layer2 = nn.Linear(state_size, num_outputs)
+
+    def forward(self, x):
+        return self.layer2(F.relu(self.layer1(x)))
+
+
+class TModel(nn.Module):
+    def __init__(
+        self,
+        d_model,
+        output_size,
+        nhead,
+        num_encoder_layers,
+        num_decoder_layers,
+        dim_feedforward,
+        dropout,
+        memory_casual=False,
+    ) -> None:
+        super().__init__()
+        self.memory_casual = memory_casual
+        self.decoder_projection = nn.Linear(1, d_model)
+        self.transformer = nn.Transformer(
+            d_model=d_model,
+            nhead=nhead,
+            num_encoder_layers=num_encoder_layers,
+            num_decoder_layers=num_decoder_layers,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.final_layer = nn.Linear(d_model, output_size)
+
+    def forward(self, src, tgt):
+        transd_tgt = self.decoder_projection(tgt)
+        transy = self.transformer(src, transd_tgt)
+        return self.final_layer(transy)
+
+        # return self.transformer(src, tgt, memory_casual=self.memory_casual)
+
+
 class RecoveryNet(nn.Module):
 
     def __init__(self, input_size, state_size, num_outputs, time_steps):
