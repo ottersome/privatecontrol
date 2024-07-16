@@ -73,6 +73,8 @@ def argsies() -> argparse.Namespace:
         help="Where to save the outputs",
     )
     ap.add_argument("--no-autoindent")
+    ap.add_argument("--seed", default=0, type=int)
+    ap.add_argument("--lr", default=0.001, type=float)
 
     args = ap.parse_args()
 
@@ -113,6 +115,10 @@ def batch_wise_datagen(
     state_size: int, input_dim: int, num_outputs: int, time_steps: int, batch_size: int
 ):
     # Let me start with an RNN
+    # Restart the random seed to make sure the same data is generated
+    torch.manual_seed(0)
+    np.random.seed(0)
+
     Amats, Bmats, Cmats, Dmats = generate_state_space_systems(
         state_size,
         input_dim,
@@ -160,8 +166,8 @@ def train(
             args.batch_size,
         )
         model.zero_grad()
-        hidden_truths = hidden_truths.to(device)
-        system_outputs = system_outputs.to(device)
+        hidden_truths = hidden_truths.transpose(1, 2).to(device)
+        system_outputs = system_outputs.transpose(1, 2).to(device)
         # inspect(hidden_truths)
 
         # Let me inspect hidden outputs
@@ -172,7 +178,8 @@ def train(
         logger.debug(f"System Outputs ({system_outputs.shape}): {system_outputs}")
         nan_idx = torch.where(torch.isnan(hidden_truths))
         logger.debug(f"Hidden Truths Nan idx: {nan_idx}")
-        outputs, hidden_states = model(hidden_truths)
+        # outputs, hidden_states = model(hidden_truths, system_outputs) # For rnn
+        outputs = model(hidden_truths, system_outputs)
         nan_idx = torch.where(torch.isnan(outputs))
         logger.debug(f"Outputs ({outputs.shape}): {outputs}")
         logger.debug(f"Output Nan Nan idx: {nan_idx}")
@@ -212,7 +219,10 @@ def train(
             args.batch_size,
         )
 
-        outputs, hidden_states = model(hidden_truths)
+        hidden_truths = hidden_truths.transpose(1, 2).to(device)
+        system_outputs = system_outputs.transpose(1, 2).to(device)
+        # outputs, hidden_states = model(hidden_truths, system_outputs)# For RNN
+        outputs = model(hidden_truths, system_outputs)  # For RN
 
         transposed_system_outputs = system_outputs.transpose(1, 2)
         loss = criterion(outputs, transposed_system_outputs)
@@ -299,6 +309,40 @@ class RecoveryNet(nn.Module):
             # ) / self.count
 
 
+class TModel(nn.Module):
+    def __init__(
+        self,
+        d_model,
+        output_size,
+        nhead,
+        num_encoder_layers,
+        num_decoder_layers,
+        dim_feedforward,
+        dropout,
+        memory_casual=False,
+    ) -> None:
+        super().__init__()
+        self.memory_casual = memory_casual
+        self.decoder_projection = nn.Linear(1, d_model)
+        self.transformer = nn.Transformer(
+            d_model=d_model,
+            nhead=nhead,
+            num_encoder_layers=num_encoder_layers,
+            num_decoder_layers=num_decoder_layers,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.final_layer = nn.Linear(d_model, output_size)
+
+    def forward(self, src, tgt):
+        transd_tgt = self.decoder_projection(tgt)
+        transy = self.transformer(src, transd_tgt)
+        return self.final_layer(transy)
+
+        # return self.transformer(src, tgt, memory_casual=self.memory_casual)
+
+
 if __name__ == "__main__":
 
     args = argsies()
@@ -308,9 +352,11 @@ if __name__ == "__main__":
     device = torch.device("mps") if torch.backends.mps.is_available() else device
     # model = RecoveryNet(
     #     args.state_size, args.state_size, args.num_outputs, args.time_steps
-    model = torch.nn.Transformer(
+
+    model = TModel(
         d_model=args.state_size,
-        nhead=4,
+        output_size=args.num_outputs,
+        nhead=2,
         num_encoder_layers=2,
         num_decoder_layers=2,
         dim_feedforward=128,
