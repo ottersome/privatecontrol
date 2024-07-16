@@ -24,3 +24,17 @@ def create_logger(name: str) -> logging.Logger:
     logger.addHandler(fh)
     logger.addHandler(ch)
     return logger
+
+
+# Creat decorator with dates and reason saying why a function is deprecated
+def deprecated(reason, date):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            raise NotImplementedError(
+                f"{func.__name__} has deprecated since {date} and will be removed in the future.\n"
+                f"Reason: {reason}\n"
+            )
+
+        return wrapper
+
+    return decorator
