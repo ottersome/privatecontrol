@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-from conrecon.automated_generation import generate_state_space_systems
+from conrecon.automated_generation import generate_state_space_system
 from conrecon.plotting import TrainLayout
 from conrecon.utils import create_logger
 from rich.console import Console
@@ -88,6 +88,7 @@ def get_n_sims(
     Amat: np.ndarray,
     Bmat: np.ndarray,
     Cmat: np.ndarray,
+    init_cond: np.ndarray,
     time_length: int,
     input_dim: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -100,7 +101,6 @@ def get_n_sims(
     u = np.zeros((input_dim, len(t)))
     # u[:, int(len(t) / 4)] = 1
     # TODO: think about this initial condition
-    init_cond = np.random.uniform(0, 1, sys.nstates)
     # Lets run the simulation and see what happens
     timepts = np.linspace(0, 10, time_length)
     response = ct.input_output_response(sys, timepts, u, X0=init_cond)  # type: ignore
@@ -112,14 +112,19 @@ def get_n_sims(
 
 
 def batch_wise_datagen(
-    state_size: int, input_dim: int, num_outputs: int, time_steps: int, batch_size: int
+    state_size: int,
+    input_dim: int,
+    num_outputs: int,
+    time_steps: int,
+    batch_size: int,
+    device: torch.device,
 ):
     # Let me start with an RNN
     # Restart the random seed to make sure the same data is generated
     torch.manual_seed(0)
     np.random.seed(0)
 
-    Amats, Bmats, Cmats, Dmats = generate_state_space_systems(
+    A, B, C, _ = generate_state_space_system(
         state_size,
         input_dim,
         num_outputs,
@@ -142,7 +147,9 @@ def batch_wise_datagen(
     )
 
     for i in range(batch_size):
-        results = get_n_sims(Amats[i], Bmats[i], Cmats[i], time_steps, input_dim)
+        # CHECK: Might be A[1]
+        init_cond = np.random.uniform(0, 1, A.shape[0])
+        results = get_n_sims(A, B, C, init_cond, time_steps, input_dim)
         hidden_truths[i, :, :] = torch.from_numpy(results[0])
         system_outputs[i, :, :] = torch.from_numpy(results[1])
 
@@ -164,6 +171,7 @@ def train(
             args.num_outputs,
             args.time_steps,
             args.batch_size,
+            device,
         )
         model.zero_grad()
         hidden_truths = hidden_truths.transpose(1, 2).to(device)
@@ -217,6 +225,7 @@ def train(
             args.num_outputs,
             args.time_steps,
             args.batch_size,
+            device,
         )
 
         hidden_truths = hidden_truths.transpose(1, 2).to(device)
