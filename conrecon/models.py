@@ -3,6 +3,7 @@ import os
 
 import torch
 import torch.nn.functional as F
+from rich import inspect
 from torch import nn
 
 
@@ -22,7 +23,10 @@ class SimpleModel(nn.Module):
         self.layer2 = nn.Linear(state_size, num_outputs)
 
     def forward(self, x):
-        return self.layer2(F.relu(self.layer1(x)))
+        # X will be in (batch_size, time_steps, dimension) # We ned to flatten it to (batch_size, time_steps * dimension)
+        imp = x.view(-1, x.shape[2])
+        outs = self.layer2(F.relu(self.layer1(imp)))
+        return outs.reshape(x.shape[0], x.shape[1], outs.shape[1])
 
 
 class TModel(nn.Module):
