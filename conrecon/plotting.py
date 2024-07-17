@@ -1,6 +1,6 @@
 # All the imports
 import shutil
-from typing import List
+from typing import List, Union
 
 import numpy as np
 from rich.console import Console
@@ -53,43 +53,79 @@ class Plot:
 
 class TrainLayout:
     def __init__(
-        self, epoch: int, tlosses: List[float], vlosses: List[float], num_batches
+        self,
+        epochs: int,
+        num_batches: int,
+        tlosses: List[float],
+        vlosses: List[float],
     ):
-        self.progress = Progress(
+        # Progress bars
+        self.epoch_progress = Progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             "[progress.percentage]{task.percentage:>3.0f}%",
             TimeRemainingColumn(),
         )
-        self.task = self.progress.add_task("[cyan]Training..", total=num_batches)
+        self.batch_progress = Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            "[progress.percentage]{task.percentage:>3.0f}%",
+            TimeRemainingColumn(),
+        )
+        self.epoch_task = self.epoch_progress.add_task("[green]Epochs..", total=epochs)
+        self.batch_task = self.batch_progress.add_task(
+            "[cyan]Batches..", total=num_batches
+        )
+
         self.layout = Layout()
+        self.epochs = epochs
         self.num_batches = num_batches
-        self.table = Table(title=f"Epoch {epoch}")
+        self.table = Table(title=f"Epoch {0}/epochs")
         self.table.add_column("Metric")
         self.table.add_column("Value")
         if len(tlosses) > 1:
             self.table.add_row("Training Loss", f"{tlosses[-1]:.3f}")
             self.table.add_row("Validation Loss", f"{vlosses[-1]:.3f}")
 
-        self.plot = Plot(width=60, height=20)
-        # self.plot.add_series(tlosses, label="Loss", color="red")
+        self.tplot = Plot(width=60, height=20)
+        self.vplot = Plot(width=60, height=20)
 
         self.layout.split(
-            Layout(self.progress, name="progress", size=3),
+            Layout(self.epoch_progress, name="Epoch progress", size=3),
+            Layout(self.batch_progress, name="Batch progress", size=3),
             # Layout(Panel(plot, title="Loss Curve"), name="plot"),
             Layout(self.table, name="table", size=10),
-            Layout(self.plot, name="plot", size=20),
+            Layout(self.tplot, name="Training Plot", size=20),
+            Layout(self.vplot, name="Validation Plot", size=20),
         )
+        self.cur_batch = 0
 
-    def update(self, epoch: int, tloss: float, vloss: float):
-        self.progress.update(
-            self.task, advance=1, description=f"Epoch {epoch+1}/{self.num_batches}"
+    def update(
+        self, epoch: int, batch_no: int, tloss: float, vloss: Union[float, None]
+    ):
+        assert tloss is not None, "Loss should not be None"
+        if self.cur_batch + 1 > self.num_batches:
+            self.cur_batch = 0
+            self.batch_progress.reset(self.batch_task)
+            self.epoch_progress.update(
+                self.epoch_task, advance=1, description=f"Epoch {epoch+1}/{self.epochs}"
+            )
+
+        self.batch_progress.update(
+            self.batch_task,
+            advance=1,
+            description=f"Batch {batch_no+1}/{self.num_batches}",
         )
+        self.cur_batch += 1
         # Clear the table from rows
-        new_table = Table(title=f"Epoch {epoch}")
+        new_table = Table(
+            title=f"Epoch {epoch}/{self.epochs}, Batch {batch_no+1}/{self.num_batches}"
+        )
         new_table.add_column("Metric")
         new_table.add_column("Value")
         new_table.add_row("Training Loss", f"{tloss:.3f}")
-        new_table.add_row("Validation Loss", f"{vloss:.3f}")
-        self.plot.add_measurement(tloss)
+        self.tplot.add_measurement(tloss)
+        if vloss is not None:
+            new_table.add_row("Validation Loss", f"{vloss:.3f}")
+            self.vplot.add_measurement(vloss)
         self.layout["table"].update(new_table)
