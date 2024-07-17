@@ -1,3 +1,7 @@
+"""
+Script made to try to train the modern to do output prediction in an online manner
+"""
+
 import argparse
 import logging
 import os

@@ -50,7 +50,7 @@ def generate_controllable_system(
     Amats: List[np.ndarray], num_inputs
 ) -> List[np.ndarray]:
     """
-    Exsure controllability_matrix
+    Ensure controllability_matrix
     """
     Bs = []
     for ai in range(len(Amats)):
