@@ -3,6 +3,7 @@ import argparse
 import control as ct
 import matplotlib.pyplot as plt
 import numpy as np
+
 from conrecon.automated_generation import generate_state_space_systems
 
 
@@ -38,6 +39,7 @@ if __name__ == "__main__":
         args.num_of_gens,
     )
 
+    # CHECK: Wy necessary
     ct.use_fbs_defaults()  # Use settings to match FBS
     for i in range(args.num_of_gens):
         A, B, C = Amats[i], Bmats[i], Cmats[i]
