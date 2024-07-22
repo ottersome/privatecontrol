@@ -6,10 +6,11 @@ from typing import Generator, Iterable, List, Tuple
 import control as ct
 import matplotlib.pyplot as plt
 import numpy as np
-from conrecon.automated_generation import generate_state_space_system
 from pykalman import KalmanFilter
 from rich import inspect
 from rich.console import Console
+
+from conrecon.automated_generation import generate_state_space_system
 
 console = Console()
 
@@ -18,7 +19,7 @@ def plot_states(
     estimated_states: np.ndarray,
     states: np.ndarray,
     save_path: str,
-    first_n_states: int = 3,
+    first_n_states: int = 7,
 ):
     assert (
         len(states.shape) == 3
@@ -37,18 +38,19 @@ def plot_states(
     inspect(estimated_states.shape, title="Shape of the estimated states")
     states_shown = min(first_n_states, num_elements)
     color_map = plt.get_cmap("tab10")
+    print(f"Showing {num_outputs} outputs")
     for i in range(num_outputs):
         for j in range(states_shown):
             # Plot the outputs
             ax[i, 0].plot(
                 estimated_states[i, :, j],
-                label=f"Estimated S_i}",
+                label=f"Estimated S_{j}",
                 color=color_map(j),
                 linestyle="--",
             )
             ax[i, 0].plot(
                 states[i, :, j],
-                label=f"True S_{i}",
+                label=f"True S_{j}",
                 color=color_map(j),
             )
             ax[i, 0].set_xlabel("Time")
@@ -84,13 +86,13 @@ def argsies() -> argparse.Namespace:
         "-t", "--time_steps", default=12, help="How many systems to generate", type=int
     )
     ap.add_argument(
-        "-s", "--state_size", default=6, help="Dimensionality of the state.", type=int
+        "-s", "--state_size", default=7, help="Dimensionality of the state.", type=int
     )
     ap.add_argument(
         "-i", "--input_dim", default=3, help="Dimensionality of the input.", type=int
     )
     ap.add_argument(
-        "-o", "--output_dim", default=1, help="Dimensionality of the output.", type=int
+        "-o", "--output_dim", default=7, help="Dimensionality of the output.", type=int
     )
     ap.add_argument("--ds_cache", default=".cache/ds_kf_classical.csv", type=str)
     ap.add_argument(
@@ -102,6 +104,7 @@ def argsies() -> argparse.Namespace:
     ap.add_argument("--no-autoindent")
     ap.add_argument("--seed", default=0, type=int)
     ap.add_argument("--lr", default=0.01, type=float)
+    ap.add_argument("--first_n_states", default=7, type=int)
 
     args = ap.parse_args()
 
@@ -157,8 +160,16 @@ if __name__ == "__main__":
     random_state = np.random.RandomState(0)
     # A = [[1, 0.1], [0, 1]]
     # C = np.eye(2) + random_state.randn(2, 2) * 0.1
-    A = [[1, 0.1, 0.1], [0, 1, 0.1], [0, 0, 1]]
-    C = np.eye(3)[:2, :] + random_state.randn(2, 3) * 0.1
+    A = [
+        [1, 0.1, 0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0.1, 1, 0, 0, 0],
+        [0, 0, 0, 0, 1, 0.1, 0],
+        [0, 0, 0, 0, 0.1, 1, 0],
+        [0, 0, 0, 0, 0, 0, 1],
+    ]
+    C = np.eye(7) + random_state.randn(7, 7) * 0.1
 
     # Generate the simulations
     hidden_truths = np.zeros(
@@ -175,12 +186,13 @@ if __name__ == "__main__":
             args.output_dim,
         )
     )
+
     preds = []
     for i in range(args.num_samples):
         # CHECK: Might be A[1]
         # init_cond = np.random.uniform(0, 1, A.shape[0])
         # init_cond = np.random.normal(0, 1, A.shape[0])
-        init_cond = [5, -5, 0]
+        init_cond = [5, -5, 0, 1, 1, 0, 1]
         kf = KalmanFilter(
             transition_matrices=A, observation_matrices=C, initial_state_mean=init_cond
         )
@@ -189,11 +201,11 @@ if __name__ == "__main__":
         hidden_truths[i, :, :] = states
         output_observations[i, :, :] = obs
 
-        inspect(obs.shape, title="Shape of the output")
+        # inspect(obs.shape, title="Shape of the output")
         # Now we try to recover with the KF
         (filtered_mean, filtered_covariance) = kf.filter(obs)
         (smoothed_mean, smoothed_covariance) = kf.smooth(obs)
-        inspect(smoothed_mean.shape, title="Shape of the smoothed mean")
+        # inspect(smoothed_mean.shape, title="Shape of the smoothed mean")
         preds.append(smoothed_mean)
 
     preds = np.array(preds)
@@ -203,5 +215,5 @@ if __name__ == "__main__":
         preds[0, :, :][np.newaxis, :],
         hidden_truths[0, :, :][np.newaxis, :],
         save_path=f"{args.saveplot_dest}/plot_{timestamp}.png",
-        first_n_states=3,
+        first_n_states=args.first_n_states,
     )
