@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from numpy.linalg import matrix_rank
 
+from .utils import deprecated
+
 
 def _local_argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
@@ -48,7 +50,7 @@ def generate_controllable_system(
     Amats: List[np.ndarray], num_inputs
 ) -> List[np.ndarray]:
     """
-    Exsure controllability_matrix
+    Ensure controllability_matrix
     """
     Bs = []
     for ai in range(len(Amats)):
@@ -66,7 +68,8 @@ def generate_controllable_system(
     return Bs
 
 
-def generate_state_space_systems(
+@deprecated("Makes no sense", "2024-07-16")
+def generate_state_space_systems_random(
     n, num_inputs, num_outputs, state_size, amount_systems
 ):
     # print(f"Generating {amount_systems} systems")
@@ -79,6 +82,23 @@ def generate_state_space_systems(
     # print("Generatinng Matrices D...")
     Dmats = [np.zeros((num_outputs, num_inputs)) for _ in range(amount_systems)]
     return Amats, Bmats, Cmats, Dmats
+
+
+def generate_state_space_system(n, num_inputs, num_outputs, state_size, seed=0):
+    # Set the seed
+    np.random.seed(seed)
+    # Generate the matrices
+    A = generate_matrix_A(1, state_size)[0]
+    B = generate_controllable_system(
+        [
+            A,
+        ],
+        num_inputs,
+    )[0]
+    # CHECK: This generation here is valid
+    C = np.random.rand(num_outputs, state_size)
+    D = np.zeros((num_outputs, num_inputs))
+    return A, B, C, D
 
 
 if __name__ == "__main__":

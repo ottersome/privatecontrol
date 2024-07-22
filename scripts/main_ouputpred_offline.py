@@ -1,3 +1,8 @@
+"""
+Script for training a model to learn the A,B,C Parameters behind a simulation. 
+This is the pre-step to having it try to predict the previous step. 
+"""
+
 import argparse
 import json
 import logging
@@ -10,16 +15,15 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from conrecon.automated_generation import generate_state_space_system
+from conrecon.models import SimpleModel
+from conrecon.plotting import TrainLayout
+from conrecon.utils import create_logger
 from rich import inspect
 from rich.console import Console
 from rich.live import Live
 from torch.nn import functional as F
 from tqdm import tqdm
-
-from conrecon.automated_generation import generate_state_space_system
-from conrecon.models import SimpleModel
-from conrecon.plotting import TrainLayout
-from conrecon.utils import create_logger
 
 console = Console()
 
