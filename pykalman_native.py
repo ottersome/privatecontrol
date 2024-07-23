@@ -1,5 +1,6 @@
 import argparse
 import os
+import time
 from datetime import datetime
 from typing import Generator, Iterable, List, Tuple
 
@@ -86,13 +87,13 @@ def argsies() -> argparse.Namespace:
         "-t", "--time_steps", default=12, help="How many systems to generate", type=int
     )
     ap.add_argument(
-        "-s", "--state_size", default=7, help="Dimensionality of the state.", type=int
+        "-s", "--state_size", default=3, help="Dimensionality of the state.", type=int
     )
     ap.add_argument(
         "-i", "--input_dim", default=3, help="Dimensionality of the input.", type=int
     )
     ap.add_argument(
-        "-o", "--output_dim", default=7, help="Dimensionality of the output.", type=int
+        "-o", "--output_dim", default=1, help="Dimensionality of the output.", type=int
     )
     ap.add_argument("--ds_cache", default=".cache/ds_kf_classical.csv", type=str)
     ap.add_argument(
@@ -148,7 +149,7 @@ if __name__ == "__main__":
     args = argsies()
     # Get our A, B, C Matrices
 
-    np.random.seed(0)
+    np.random.seed(int(time.time()))
 
     # A, B, C, D = generate_state_space_system(
     #     args.input_dim,
@@ -161,15 +162,11 @@ if __name__ == "__main__":
     # A = [[1, 0.1], [0, 1]]
     # C = np.eye(2) + random_state.randn(2, 2) * 0.1
     A = [
-        [1, 0.1, 0, 0, 0, 0, 0],
-        [0, 1, 0, 0, 0, 0, 0],
-        [0, 0, 1, 0, 0, 0, 0],
-        [0, 0, 0.1, 1, 0, 0, 0],
-        [0, 0, 0, 0, 1, 0.1, 0],
-        [0, 0, 0, 0, 0.1, 1, 0],
-        [0, 0, 0, 0, 0, 0, 1],
+        [1, 0.1, 0],
+        [0, 1, 0],
+        [0, 0.3, 1],
     ]
-    C = np.eye(7) + random_state.randn(7, 7) * 0.1
+    C = np.eye(3)[:1, :] + random_state.randn(1, 3) * 0.1
 
     # Generate the simulations
     hidden_truths = np.zeros(
@@ -192,7 +189,7 @@ if __name__ == "__main__":
         # CHECK: Might be A[1]
         # init_cond = np.random.uniform(0, 1, A.shape[0])
         # init_cond = np.random.normal(0, 1, A.shape[0])
-        init_cond = [5, -5, 0, 1, 1, 0, 1]
+        init_cond = [5, -5, 1]
         kf = KalmanFilter(
             transition_matrices=A, observation_matrices=C, initial_state_mean=init_cond
         )
