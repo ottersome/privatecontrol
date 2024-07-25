@@ -232,7 +232,7 @@ def train(
     #     d_model, training_data.state_size, attn_heads, ff_hidden, dropout=dropout
     # ).to(device)
     model = TorchsTransformer(
-        d_model, training_data.state_size, attn_heads, ff_hidden, dropout=dropout
+        d_model, training_data.state_size, training_data.output_dim, attn_heads, ff_hidden, dropout=dropout
     ).to(device)
     # Show amount of parameters
     logger.info(f"Model has {sum(p.numel() for p in model.parameters())} parameters")
@@ -250,56 +250,56 @@ def train(
     eval_data = []
     batch_count = int(len(trn_states) / batch_size)
     train_layout = TrainLayout(epochs, batch_count, loss_list, eval_data)
-    batch_count = int(len(trn_states) / batch_size)
 
     # Generate the simulations
     # We will use rich for reporting this??
-    for e in range(epochs):
-        logger.info(f"Inside the epoch {e}")
-        epoch_loss = 0
-        for b in range(batch_count):
+    # f = Live(train_layout.layout, console=console, refresh_per_second=10)
+    logger.info(f"Beginning Training iwht {epochs} epochs and batch size of {batch_size} resulting in {batch_count} batches")
 
-            cur_state = trn_states[b * batch_size : (b + 1) * batch_size].to(device)
-            cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(device)
-            # CHECK: Might be A[1] or A[0]
-            init_cond = np.random.uniform(0, 5, A.shape[0])
+    with Live(train_layout.layout, console=console, refresh_per_second=10) as live:
+        for e in range(epochs):
+            epoch_loss = 0
+            for b in range(batch_count):
 
-            # Estimate the state
-            est_state = model(cur_state)
+                cur_state = trn_states[b * batch_size : (b + 1) * batch_size].to(device)
+                cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(device)
 
-            loss = criterion(est_state, cur_output)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            loss_list.append(loss.item())
-            epoch_loss += loss.item()
-            cur_loss = loss.item()
+                # Estimate the state
+                est_state = model(cur_state)
 
-            train_layout.update(e, b, cur_loss, None)
+                loss = criterion(est_state, cur_output)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                loss_list.append(loss.item())
+                epoch_loss += loss.item()
+                cur_loss = loss.item()
 
-        epoch_loss /= batch_count
-        # Normal Reporting
-        if (e + 1) % 1 == 0:
-            print("Epoch: {}, Loss: {:.5f}".format(e + 1, epoch_loss))
-        # Eval Reporting
-        e_report = None
-        if e % eval_interval == 0:
-            model.eval()
-            preds = model(t_val_states)
-            # preds = preds.view(-1).data.numpy().reshape(hidden)
-            loss = criterion(preds, t_val_outputs)
-            eval_data.append(preds)
-            e_report = loss.item()
+                train_layout.update(e, b, cur_loss, None)
 
-            # TODO:: Plot for testing
-            # plot_states(
-            #     preds[0, :, :][np.newaxis, :],
-            #     hidden_truths[0, :, :][np.newaxis, :],
-            #     save_path=f"{args.saveplot_dest}/plot_{timestamp}.png",
-            #     first_n_states=args.first_n_states,
-            # )
-        # train_layout.update(e, 0, loss.item(), None)
+            # Normal Reporting
+            if (e + 1) % 1 == 0:
+                print("Epoch: {}, Loss: {:.5f}".format(e + 1, epoch_loss))
+            # Eval Reporting
+            e_report = None
+            if e % eval_interval == 0:
+                model.eval()
+                preds = model(t_val_states)
+                # preds = preds.view(-1).data.numpy().reshape(hidden)
+                loss = criterion(preds, t_val_outputs)
+                eval_data.append(preds)
+                e_report = loss.item()
 
+                # TODO:: Plot for testing
+                # plot_states(
+                #     preds[0, :, :][np.newaxis, :],
+                #     hidden_truths[0, :, :][np.newaxis, :],
+                #     save_path=f"{args.saveplot_dest}/plot_{timestamp}.png",
+                #     first_n_states=args.first_n_states,
+                # )
+            # train_layout.update(e, 0, loss.item(), None)
+
+    f.stop()
     return model, loss_list, eval_data
 
 
