@@ -107,7 +107,7 @@ def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     # State stuff here
     ap.add_argument("-e", "--epochs", default=10, help="How many epochs to train for", type=int)
-    ap.add_argument("--eval_interval", default=1, help="How many epochs to train for", type=int)
+    ap.add_argument("--eval_interval", default=32, help="How many epochs to train for", type=int)
     ap.add_argument(
         "-n", "--num_samples", default=4, type=int, help="How many Samples to Evaluate"
     )
@@ -190,6 +190,15 @@ def design_matrices() -> SSParam:
     C = np.array(C)
     return A, None, C, None
 
+def eval_model(model,criterion,batch_size, t_val_states, t_val_outputs):
+    batch_count = int(len(t_val_states) / batch_size)
+    model.eval()
+    for b in range(batch_count):
+        states = t_val_states[b * batch_size : (b + 1) * batch_size]
+        outputs = t_val_outputs[b * batch_size : (b + 1) * batch_size]
+        preds = model(states)
+        loss = criterion(preds, outputs)
+        return loss.item()
 
 def train(
     epochs: int,
@@ -275,20 +284,17 @@ def train(
                 epoch_loss += loss.item()
                 cur_loss = loss.item()
 
-                train_layout.update(e, b, cur_loss, None)
+                # Eval Reporting
+                e_report = None
+                if b % eval_interval == 0:
+                    e_report = eval_model(
+                        model, criterion, batch_size, t_val_states, t_val_outputs
+                    )
+                train_layout.update(e, b, cur_loss, e_report)
 
             # Normal Reporting
             if (e + 1) % 1 == 0:
                 print("Epoch: {}, Loss: {:.5f}".format(e + 1, epoch_loss))
-            # Eval Reporting
-            e_report = None
-            if e % eval_interval == 0:
-                model.eval()
-                preds = model(t_val_states)
-                # preds = preds.view(-1).data.numpy().reshape(hidden)
-                loss = criterion(preds, t_val_outputs)
-                eval_data.append(preds)
-                e_report = loss.item()
 
                 # TODO:: Plot for testing
                 # plot_states(
@@ -299,7 +305,6 @@ def train(
                 # )
             # train_layout.update(e, 0, loss.item(), None)
 
-    f.stop()
     return model, loss_list, eval_data
 
 
