@@ -65,8 +65,6 @@ def plot_states(
     ax = np.atleast_2d(ax)  # Now ax is to be 2D
     plt.tight_layout()
 
-    inspect(states.shape, title="Shape of the states")
-    inspect(estimated_states.shape, title="Shape of the estimated states")
     states_shown = min(first_n_states, num_elements)
     color_map = plt.get_cmap("tab10")
     print(f"Showing {num_outputs} outputs")
@@ -106,8 +104,9 @@ def plot_states(
 def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     # State stuff here
-    ap.add_argument("-e", "--epochs", default=10, help="How many epochs to train for", type=int)
-    ap.add_argument("--eval_interval", default=32, help="How many epochs to train for", type=int)
+    ap.add_argument("-e", "--epochs", default=3, help="How many epochs to train for", type=int)
+    ap.add_argument( "--num_layers", default=1, help="How many epochs to train for", type=int)
+    ap.add_argument("--eval_interval", default=100, help="How many epochs to train for", type=int)
     ap.add_argument(
         "-n", "--num_samples", default=4, type=int, help="How many Samples to Evaluate"
     )
@@ -130,13 +129,13 @@ def argsies() -> argparse.Namespace:
     ap.add_argument("--ds_cache", default=".cache/pykalpkg_ds.csv", type=str)
     ap.add_argument(
         "--saveplot_dest",
-        default="./figures/",
+        default="./figures/pykalman_transformer/",
         help="Where to save the outputs",
     )
     ap.add_argument("--ds_size", default=10000, type=int)
     ap.add_argument("--no-autoindent")
     ap.add_argument("--seed", default=0, type=int)
-    ap.add_argument("--lr", default=0.01, type=float)
+    ap.add_argument("--lr", default=0.001, type=float)
     ap.add_argument("--first_n_states", default=7, type=int)
 
     args = ap.parse_args()
@@ -196,8 +195,8 @@ def eval_model(model,criterion,batch_size, t_val_states, t_val_outputs):
     for b in range(batch_count):
         states = t_val_states[b * batch_size : (b + 1) * batch_size]
         outputs = t_val_outputs[b * batch_size : (b + 1) * batch_size]
-        preds = model(states)
-        loss = criterion(preds, outputs)
+        preds = model(outputs)
+        loss = criterion(preds, states)
         return loss.item()
 
 def train(
@@ -205,6 +204,9 @@ def train(
     eval_interval: int,
     data: Tuple[torch.Tensor, torch.Tensor],
     training_data: TrainingData,
+    plot_dest: str,
+    lr: float = 0.001,
+    num_layers: int = 4,
     tt_split : float = 0.8,
     d_model: int = 128,
     attn_heads: int = 8,
@@ -241,7 +243,13 @@ def train(
     #     d_model, training_data.state_size, attn_heads, ff_hidden, dropout=dropout
     # ).to(device)
     model = TorchsTransformer(
-        d_model, training_data.state_size, training_data.output_dim, attn_heads, ff_hidden, dropout=dropout
+        d_model,
+        training_data.output_dim,
+        training_data.state_size,
+        attn_heads,
+        ff_hidden,
+        dropout=dropout,
+        num_layers=num_layers,
     ).to(device)
     # Show amount of parameters
     logger.info(f"Model has {sum(p.numel() for p in model.parameters())} parameters")
@@ -249,7 +257,7 @@ def train(
         f"Model is of type {type(model)} with device {next(model.parameters()).device}"
     )
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_list = []
     kf = KalmanFilter(
         transition_matrices=A, observation_matrices=C
@@ -264,7 +272,7 @@ def train(
     # We will use rich for reporting this??
     # f = Live(train_layout.layout, console=console, refresh_per_second=10)
     logger.info(f"Beginning Training iwht {epochs} epochs and batch size of {batch_size} resulting in {batch_count} batches")
-
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     with Live(train_layout.layout, console=console, refresh_per_second=10) as live:
         for e in range(epochs):
             epoch_loss = 0
@@ -274,9 +282,9 @@ def train(
                 cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(device)
 
                 # Estimate the state
-                est_state = model(cur_state)
+                est_state = model(cur_output)
 
-                loss = criterion(est_state, cur_output)
+                loss = criterion(est_state, cur_state)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -290,20 +298,23 @@ def train(
                     e_report = eval_model(
                         model, criterion, batch_size, t_val_states, t_val_outputs
                     )
+                    model.eval()
+                    one_test_state = val_states[0:1, :, :].cpu().detach().numpy()
+                    one_test_output = val_outputs[0:1, :, :]
+                    preds = model(one_test_output).cpu().detach().numpy()
+
+                    plot_states(
+                        preds[0:1, :, :],
+                        one_test_state[0:1, :, :],
+                        save_path=f"{plot_dest}/plot_{timestamp}_{e}_{b}.png",
+                        first_n_states=3,
+                    )
+
                 train_layout.update(e, b, cur_loss, e_report)
 
             # Normal Reporting
             if (e + 1) % 1 == 0:
                 print("Epoch: {}, Loss: {:.5f}".format(e + 1, epoch_loss))
-
-                # TODO:: Plot for testing
-                # plot_states(
-                #     preds[0, :, :][np.newaxis, :],
-                #     hidden_truths[0, :, :][np.newaxis, :],
-                #     save_path=f"{args.saveplot_dest}/plot_{timestamp}.png",
-                #     first_n_states=args.first_n_states,
-                # )
-            # train_layout.update(e, 0, loss.item(), None)
 
     return model, loss_list, eval_data
 
@@ -461,6 +472,9 @@ def main():
         args.eval_interval,
         data=(t_hidden, t_outputs),
         training_data=training_data,
+        plot_dest=args.saveplot_dest,
+        num_layers=args.num_layers,
+        lr=args.lr,
     )
 
     ## ML-Approach

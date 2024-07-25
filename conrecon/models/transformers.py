@@ -18,6 +18,7 @@ class TorchsTransformer(nn.Module):
         ff_hidden,
         dropout,
         batch_first=True,
+        num_layers=1,
         max_len=1024,
     ):
         super().__init__()
@@ -25,11 +26,13 @@ class TorchsTransformer(nn.Module):
         self.encoder_layer = TransformerEncoderLayer(
             d_model, attn_heads, ff_hidden, dropout, batch_first=batch_first
         )
-        self.transformer_encoder = TransformerEncoder(self.encoder_layer, num_layers=1)
+        self.transformer_encoder = TransformerEncoder(self.encoder_layer, num_layers=num_layers)
         self.ouput_layer = nn.Linear(d_model, output_size)
+        self.positional_embedding = PositionalEmbedding(d_model, max_len)
         
     def forward(self, inp):
         x = self.projection(inp)
+        x = x + self.positional_embedding(x)
         x = self.transformer_encoder(x)
         x = self.ouput_layer(x)
         return x
