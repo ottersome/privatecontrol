@@ -59,6 +59,7 @@ class TrainLayout:
         tlosses: List[float],
         vlosses: List[float],
     ):
+        self.latest_vloss = 0
         # Progress bars
         self.epoch_progress = Progress(
             TextColumn("[progress.description]{task.description}"),
@@ -124,8 +125,9 @@ class TrainLayout:
         new_table.add_column("Metric")
         new_table.add_column("Value")
         new_table.add_row("Training Loss", f"{tloss:.3f}")
-        self.tplot.add_measurement(tloss)
+        new_table.add_row("Validation Loss", f"{self.latest_vloss:.3f}")
         if vloss is not None:
-            new_table.add_row("Validation Loss", f"{vloss:.3f}")
+            self.latest_vloss = vloss
             self.vplot.add_measurement(vloss)
+        self.tplot.add_measurement(tloss)
         self.layout["table"].update(new_table)
