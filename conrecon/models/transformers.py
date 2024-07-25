@@ -13,6 +13,7 @@ class TorchsTransformer(nn.Module):
         self,
         d_model,
         input_size,
+        output_size,
         attn_heads,
         ff_hidden,
         dropout,
@@ -25,10 +26,12 @@ class TorchsTransformer(nn.Module):
             d_model, attn_heads, ff_hidden, dropout, batch_first=batch_first
         )
         self.transformer_encoder = TransformerEncoder(self.encoder_layer, num_layers=1)
+        self.ouput_layer = nn.Linear(d_model, output_size)
         
     def forward(self, inp):
         x = self.projection(inp)
         x = self.transformer_encoder(x)
+        x = self.ouput_layer(x)
         return x
 
 class TransformerBlock(nn.Module):
