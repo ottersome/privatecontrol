@@ -245,29 +245,18 @@ def train(
     for e in range(epochs):
         for b in range(int(len(trn_states) / batch_size)):
 
-            # CHECK: Might be A[1]
+            cur_state = trn_states[b * batch_size : (b + 1) * batch_size].to(device)
+            cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(device)
+            # CHECK: Might be A[1] or A[0]
             init_cond = np.random.uniform(0, 5, A.shape[0])
-
-            # init_cond = np.random.normal(0, 1, A.shape[0])
-            # init_cond = [5, -5, 1]
-            # kf = KalmanFilter(
-            #     transition_matrices=A, observation_matrices=C, initial_state_mean=init_cond
-            # )
-
-            states, obs = kf.sample(training_data.time_steps, initial_state=init_cond)
-
-            logger.info(f"Observations are of shape {obs.shape}")
-            logger.info(f"State are of shape {obs.shape}")
-
-            t_obs = tensor(obs).to(torch.float32).to(device)
-            t_sta = tensor(states).to(torch.float32).to(device)
-            logger.info(f"t_obs is of type {type(t_obs)} and device {t_obs.device}")
-            logger.info(f"t_sta is of type {type(t_sta)} and device {t_sta.device}")
+            # states, obs = kf.sample(training_data.time_steps, initial_state=init_cond)
+            logger.info(f"cur_output is of type {type(cur_output)}, shape {cur_output.shape} and device {cur_output.device}")
+            logger.info(f"cur_state is of type {type(cur_state)}, shape {cur_state.shape} and device {cur_state.device}")
 
             # Estimate the state
-            est_state = model(t_obs, mask=None)
+            est_state = model(cur_state, mask=None)
 
-            loss = criterion(est_state, t_sta)
+            loss = criterion(est_state, cur_output)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
