@@ -6,11 +6,10 @@ from typing import Generator, Iterable, List, Tuple
 import control as ct
 import matplotlib.pyplot as plt
 import numpy as np
+from conrecon.automated_generation import generate_state_space_system
 from pykalman import KalmanFilter
 from rich import inspect
 from rich.console import Console
-
-from conrecon.automated_generation import generate_state_space_system
 
 console = Console()
 
@@ -201,10 +200,13 @@ if __name__ == "__main__":
         hidden_truths[i, :, :] = states
         output_observations[i, :, :] = obs
 
+        ## ML-Approach
+
+        ## Native Approach
         # inspect(obs.shape, title="Shape of the output")
         # Now we try to recover with the KF
-        (filtered_mean, filtered_covariance) = kf.filter(obs)
-        (smoothed_mean, smoothed_covariance) = kf.smooth(obs)
+        # (filtered_mean, filtered_covariance) = kf.filter(obs)
+        # (smoothed_mean, smoothed_covariance) = kf.smooth(obs)
         # inspect(smoothed_mean.shape, title="Shape of the smoothed mean")
         preds.append(smoothed_mean)
 
