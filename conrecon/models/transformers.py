@@ -5,7 +5,31 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from conrecon.utils import create_logger
+from torch.nn import TransformerEncoder
+from torch.nn import TransformerEncoderLayer
 
+class TorchsTransformer(nn.Module):
+    def __init__(
+        self,
+        d_model,
+        input_size,
+        attn_heads,
+        ff_hidden,
+        dropout,
+        batch_first=True,
+        max_len=1024,
+    ):
+        super().__init__()
+        self.projection = nn.Linear(input_size, d_model)
+        self.encoder_layer = TransformerEncoderLayer(
+            d_model, attn_heads, ff_hidden, dropout, batch_first=batch_first
+        )
+        self.transformer_encoder = TransformerEncoder(self.encoder_layer, num_layers=1)
+        
+    def forward(self, inp):
+        x = self.projection(inp)
+        x = self.transformer_encoder(x)
+        return x
 
 class TransformerBlock(nn.Module):
     """
@@ -13,7 +37,7 @@ class TransformerBlock(nn.Module):
     Transformer = MultiHead_Attention + Feed_Forward with sublayer connection
     """
 
-    def __init__(self, d_model, attn_heads, feed_forward_hidden, dropout, max_len=1024):
+    def __init__(self, d_model, input_size, attn_heads, feed_forward_hidden, dropout, max_len=1024):
         """
         :param hidden: hidden size of transformer
         :param attn_heads: head sizes of multi-head attention
@@ -22,21 +46,26 @@ class TransformerBlock(nn.Module):
         """
 
         super().__init__()
+        self.input_projection = nn.Linear(input_size, d_model)
+
         self.attention = MultiHeadedAttention(h=attn_heads, d_model=d_model)
         self.feed_forward = PositionwiseFeedForward(
             d_model=d_model, d_ff=feed_forward_hidden, dropout=dropout
         )
+
         self.input_sublayer = SublayerConnection(size=d_model, dropout=dropout)
         self.output_sublayer = SublayerConnection(size=d_model, dropout=dropout)
+
         self.dropout = nn.Dropout(p=dropout)
         self.d_model = d_model
         self.position = PositionalEmbedding(self.d_model, max_len)
         self.logger = create_logger("TransformerBlock")
 
-    def forward(self, x, mask):
+    def forward(self, inp, mask):
         self.logger.info(f"Positional embedding is of shape {self.position.pe.shape} and devixe {self.position.pe.device}")
 
-        x = x + self.position(x)
+        x = self.input_projection(inp)
+        x =  x + self.position(x)
         x = self.input_sublayer(
             x, lambda _x: self.attention.forward(_x, _x, _x, mask=mask)
         )
@@ -50,8 +79,7 @@ class PositionalEmbedding(nn.Module):
         super().__init__()
 
         # Compute the positional encodings once in log space.
-        pe = torch.zeros(max_len, d_model).float()
-        pe.require_grad = False
+        pe = torch.zeros(max_len, d_model,requires_grad=False).float()
 
         position = torch.arange(0, max_len).float().unsqueeze(1)
         div_term = (
@@ -65,7 +93,9 @@ class PositionalEmbedding(nn.Module):
         self.register_buffer("pe", pe)
 
     def forward(self, x):
-        return self.pe[:, : x.size(1)]
+        # Tile it to match batch_size
+        return self.pe[:, : x.size(1)].repeat(x.shape[0], 1, 1)
+        # return self.pe[:, : x.size(1)]
 
 
 class MultiHeadedAttention(nn.Module):

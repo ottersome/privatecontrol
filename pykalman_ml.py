@@ -14,7 +14,9 @@ import numpy as np
 import pandas as pd
 import torch
 from conrecon.automated_generation import generate_state_space_system
-from conrecon.models.transformers import TransformerBlock
+from conrecon.models.transformers import TransformerBlock, TorchsTransformer
+from torch.nn import TransformerEncoder
+from torch.nn import TransformerEncoderLayer
 from conrecon.utils import create_logger
 from pykalman import KalmanFilter
 from rich import inspect
@@ -199,7 +201,7 @@ def train(
     attn_heads: int = 8,
     ff_hidden: int = 256,
     dropout: float = 0.1,
-    batch_size: int = 32,
+    batch_size: int = 16,
 ):
     # Dta Management 
     states, outputs = data
@@ -226,8 +228,17 @@ def train(
     ), f"Current simulation requires C to be a matrix. C is type {type(C)}"
     # Setup Training Tools
     logger.info(f"Setting training fundamentals")
-    model = TransformerBlock(d_model, attn_heads, ff_hidden, dropout=dropout).to(device)
-    logger.info(f"Model is of type {type(model)} with device {next(model.parameters()).device}")
+    # model = TransformerBlock(
+    #     d_model, training_data.state_size, attn_heads, ff_hidden, dropout=dropout
+    # ).to(device)
+    model = TorchsTransformer(
+        d_model, training_data.state_size, attn_heads, ff_hidden, dropout=dropout
+    ).to(device)
+    # Show amount of parameters
+    logger.info(f"Model has {sum(p.numel() for p in model.parameters())} parameters")
+    logger.info(
+        f"Model is of type {type(model)} with device {next(model.parameters()).device}"
+    )
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
     loss_list = []
@@ -239,51 +250,55 @@ def train(
     eval_data = []
     batch_count = int(len(trn_states) / batch_size)
     train_layout = TrainLayout(epochs, batch_count, loss_list, eval_data)
+    batch_count = int(len(trn_states) / batch_size)
 
     # Generate the simulations
     # We will use rich for reporting this??
     for e in range(epochs):
-        for b in range(int(len(trn_states) / batch_size)):
+        logger.info(f"Inside the epoch {e}")
+        epoch_loss = 0
+        for b in range(batch_count):
 
             cur_state = trn_states[b * batch_size : (b + 1) * batch_size].to(device)
             cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(device)
             # CHECK: Might be A[1] or A[0]
             init_cond = np.random.uniform(0, 5, A.shape[0])
-            # states, obs = kf.sample(training_data.time_steps, initial_state=init_cond)
-            logger.info(f"cur_output is of type {type(cur_output)}, shape {cur_output.shape} and device {cur_output.device}")
-            logger.info(f"cur_state is of type {type(cur_state)}, shape {cur_state.shape} and device {cur_state.device}")
 
             # Estimate the state
-            est_state = model(cur_state, mask=None)
+            est_state = model(cur_state)
 
             loss = criterion(est_state, cur_output)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             loss_list.append(loss.item())
+            epoch_loss += loss.item()
+            cur_loss = loss.item()
 
-            # Normal Reporting
-            if (e + 1) % 1 == 0:
-                print("Epoch: {}, Loss: {:.5f}".format(e + 1, loss.item()))
-            # Eval Reporting
-            e_report = None
-            if e % eval_interval == 0:
-                model.eval()
-                preds = model(t_val_states, mask=None)
-                # preds = preds.view(-1).data.numpy().reshape(hidden)
-                loss = criterion(preds, t_val_outputs)
-                eval_data.append(preds)
-                e_report = loss.item()
+            train_layout.update(e, b, cur_loss, None)
 
-                # TODO:: Plot for testing
-                # plot_states(
-                #     preds[0, :, :][np.newaxis, :],
-                #     hidden_truths[0, :, :][np.newaxis, :],
-                #     save_path=f"{args.saveplot_dest}/plot_{timestamp}.png",
-                #     first_n_states=args.first_n_states,
-                # )
+        epoch_loss /= batch_count
+        # Normal Reporting
+        if (e + 1) % 1 == 0:
+            print("Epoch: {}, Loss: {:.5f}".format(e + 1, epoch_loss))
+        # Eval Reporting
+        e_report = None
+        if e % eval_interval == 0:
+            model.eval()
+            preds = model(t_val_states)
+            # preds = preds.view(-1).data.numpy().reshape(hidden)
+            loss = criterion(preds, t_val_outputs)
+            eval_data.append(preds)
+            e_report = loss.item()
 
-            train_layout.update(e, b, loss.item(), e_report)
+            # TODO:: Plot for testing
+            # plot_states(
+            #     preds[0, :, :][np.newaxis, :],
+            #     hidden_truths[0, :, :][np.newaxis, :],
+            #     save_path=f"{args.saveplot_dest}/plot_{timestamp}.png",
+            #     first_n_states=args.first_n_states,
+            # )
+        # train_layout.update(e, 0, loss.item(), None)
 
     return model, loss_list, eval_data
 
