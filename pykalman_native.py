@@ -10,9 +10,12 @@ from conrecon.automated_generation import generate_state_space_system
 from pykalman import KalmanFilter
 from rich import inspect
 from rich.console import Console
+from conrecon.utils import create_logger
 
 console = Console()
 
+name_file = os.path.basename(__file__)
+logger = create_logger(name_file)
 
 def plot_states(
     estimated_states: np.ndarray,
@@ -75,7 +78,7 @@ def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     # State stuff here
     ap.add_argument(
-        "-n", "--num_samples", default=4, type=int, help="How many Samples to Evaluate"
+        "-n", "--num_samples", default=1, type=int, help="How many Samples to Evaluate"
     )
     ap.add_argument(
         "--eval_size", default=4, help="How many systems to generate", type=int
@@ -85,13 +88,16 @@ def argsies() -> argparse.Namespace:
         "-t", "--time_steps", default=12, help="How many systems to generate", type=int
     )
     ap.add_argument(
-        "-s", "--state_size", default=7, help="Dimensionality of the state.", type=int
+        "-s", "--state_size", default=3, help="Dimensionality of the state.", type=int
     )
     ap.add_argument(
         "-i", "--input_dim", default=3, help="Dimensionality of the input.", type=int
     )
     ap.add_argument(
-        "-o", "--output_dim", default=7, help="Dimensionality of the output.", type=int
+        "-o", "--output_dim", default=2, help="Dimensionality of the output.", type=int
+    )
+    ap.add_argument(
+        "-r", "--random", action="store_true",default=False
     )
     ap.add_argument("--ds_cache", default=".cache/ds_kf_classical.csv", type=str)
     ap.add_argument(
@@ -147,8 +153,12 @@ if __name__ == "__main__":
     args = argsies()
     # Get our A, B, C Matrices
 
-    np.random.seed(0)
-
+    seed = 0
+    if args.random:
+        from time import time
+        seed = int(time())
+    np.random.seed(seed)
+ 
     # A, B, C, D = generate_state_space_system(
     #     args.input_dim,
     #     args.output_dim,
@@ -157,58 +167,62 @@ if __name__ == "__main__":
     # )
 
     random_state = np.random.RandomState(0)
-    # A = [[1, 0.1], [0, 1]]
-    # C = np.eye(2) + random_state.randn(2, 2) * 0.1
-    A = [
-        [1, 0.1, 0, 0, 0, 0, 0],
-        [0, 1, 0, 0, 0, 0, 0],
-        [0, 0, 1, 0, 0, 0, 0],
-        [0, 0, 0.1, 1, 0, 0, 0],
-        [0, 0, 0, 0, 1, 0.1, 0],
-        [0, 0, 0, 0, 0.1, 1, 0],
-        [0, 0, 0, 0, 0, 0, 1],
-    ]
-    C = np.eye(7) + random_state.randn(7, 7) * 0.1
+    A = np.array([[1, 0.1, 0],  [0, 0.2, 0.3], [0, 0, 0.8]])
+    C = np.eye(3)[:2,:] + random_state.randn(2, 3) * 0.1
+    # A = [
+    #     [1, 0.1, 0, 0, 0, 0, 0],
+    #     [0, 1, 0, 0, 0, 0, 0],
+    #     [0, 0, 1, 0, 0, 0, 0],
+    #     [0, 0, 0.1, 1, 0, 0, 0],
+    #     [0, 0, 0, 0, 1, 0.1, 0],
+    #     [0, 0, 0, 0, 0.1, 1, 0],
+    #     [0, 0, 0, 0, 0, 0, 1],
+    # ]
+    # C = np.eye(7) + random_state.randn(7, 7) * 0.1
 
     # Generate the simulations
     hidden_truths = np.zeros(
         (
-            args.num_samples,
+            1,
             args.time_steps,
             args.state_size,
         )
     )
     output_observations = np.zeros(
         (
-            args.num_samples,
+            1,
             args.time_steps,
             args.output_dim,
         )
     )
 
     preds = []
-    for i in range(args.num_samples):
-        # CHECK: Might be A[1]
-        # init_cond = np.random.uniform(0, 1, A.shape[0])
-        # init_cond = np.random.normal(0, 1, A.shape[0])
-        init_cond = [5, -5, 0, 1, 1, 0, 1]
-        kf = KalmanFilter(
-            transition_matrices=A, observation_matrices=C, initial_state_mean=init_cond
-        )
-        states, obs = kf.sample(args.time_steps, initial_state=init_cond)
 
-        hidden_truths[i, :, :] = states
-        output_observations[i, :, :] = obs
+    # CHECK: Might be A[1]
+    # init_cond = np.random.uniform(-5, 5, A.shape[1])
+    # init_cond = np.random.normal(0, 1, A.shape[0])
+    # init_cond = [5, -5, 0, 1, 1, 0, 1]
+    init_cond = [5, -5, 0]
+    kf = KalmanFilter(
+        transition_matrices=A, observation_matrices=C, initial_state_mean=init_cond
+    )
+    states, obs = kf.sample(args.time_steps, initial_state=init_cond)
 
-        ## ML-Approach
+    hidden_truths[0, :, :] = states
+    output_observations[0, :, :] = obs
 
-        ## Native Approach
-        # inspect(obs.shape, title="Shape of the output")
-        # Now we try to recover with the KF
-        # (filtered_mean, filtered_covariance) = kf.filter(obs)
-        # (smoothed_mean, smoothed_covariance) = kf.smooth(obs)
-        # inspect(smoothed_mean.shape, title="Shape of the smoothed mean")
-        preds.append(smoothed_mean)
+    inspect(A, title="A Matrix")
+    inspect(C, title="C Matrix")
+
+    ## ML-Approach
+
+    ## Native Approach
+    # inspect(obs.shape, title="Shape of the output")
+    # Now we try to recover with the KF
+    (filtered_mean, filtered_covariance) = kf.filter(obs)
+    (smoothed_mean, smoothed_covariance) = kf.smooth(obs)
+    # inspect(smoothed_mean.shape, title="Shape of the smoothed mean")
+    preds.append(smoothed_mean)
 
     preds = np.array(preds)
     # Now we plot the results
