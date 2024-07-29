@@ -48,18 +48,19 @@ logger = create_logger("__main__")
 
 def plot_states(
     estimated_states: np.ndarray,
-    states: np.ndarray,
+    true_states: np.ndarray,
+    benchmark_states: np.ndarray,
     save_path: str,
     first_n_states: int = 7,
 ):
     assert (
-        len(states.shape) == 3
-    ), f"Can only plot up to 3 outputs. Received shape {states.shape}"
+        len(true_states.shape) == 3
+    ), f"Can only plot up to 3 outputs. Received shape {true_states.shape}"
     assert (
         len(estimated_states.shape) == 3
     ), f"Can only plot up to 3 outputs. Received shape {estimated_states.shape}"
-    num_outputs = states.shape[0]
-    num_elements = states.shape[2]
+    num_outputs = true_states.shape[0]
+    num_elements = true_states.shape[2]
     assert num_outputs <= 4, "Can only plot up to 4 outputs"
     fig, ax = plt.subplots(num_outputs, 2, figsize=(num_outputs * 12, 6))
     ax = np.atleast_2d(ax)  # Now ax is to be 2D
@@ -78,9 +79,15 @@ def plot_states(
                 linestyle="--",
             )
             ax[i, 0].plot(
-                states[i, :, j],
+                true_states[i, :, j],
                 label=f"True S_{j}",
                 color=color_map(j),
+            )
+            ax[i, 0].plot(
+                benchmark_states[i, :, j],
+                label=f"Benchmark S_{j}",
+                color=color_map(j),
+                linestyle=":",
             )
             ax[i, 0].set_xlabel("Time")
             ax[i, 0].set_ylabel("State")
@@ -89,7 +96,7 @@ def plot_states(
 
             # Plot the error
             ax[i, 1].plot(
-                np.abs(estimated_states[i, :, j] - states[i, :, j]), color="red"
+                np.abs(estimated_states[i, :, j] - true_states[i, :, j]), color="red"
             )
             ax[i, 1].set_xlabel("Time")
             ax[i, 1].set_ylabel("Error")
@@ -124,7 +131,7 @@ def argsies() -> argparse.Namespace:
         "-i", "--input_dim", default=3, help="Dimensionality of the input.", type=int
     )
     ap.add_argument(
-        "-o", "--output_dim", default=1, help="Dimensionality of the output.", type=int
+        "-o", "--output_dim", default=2, help="Dimensionality of the output.", type=int
     )
     ap.add_argument("--ds_cache", default=".cache/pykalpkg_ds.csv", type=str)
     ap.add_argument(
@@ -179,17 +186,24 @@ def argsies() -> argparse.Namespace:
 
 def design_matrices() -> SSParam:
     random_state = np.random.RandomState(0)
-    A = [
-        [1, 0.1, 0],
-        [0, 1, 0],
-        [0, 0.3, 1],
-    ]
-    C = np.eye(3)[:1, :] + random_state.randn(1, 3) * 0.1
+    A = [[1.0, 0.1, 0.0],
+         [0.0, 0.2, 0.3],
+         [0.0, 0.0, 0.8]]
+
+    C = np.eye(3)[:2, :] + random_state.randn(2, 3) * 0.1
     A = np.array(A)
     C = np.array(C)
     return A, None, C, None
 
-def eval_model(model,criterion,batch_size, t_val_states, t_val_outputs):
+
+def eval_model(
+    model: nn.Module,
+    criterion: nn.Module,
+    batch_size: int,
+    t_val_states: torch.Tensor,
+    t_val_outputs: torch.Tensor,
+):
+    
     batch_count = int(len(t_val_states) / batch_size)
     model.eval()
     for b in range(batch_count):
@@ -238,7 +252,7 @@ def train(
         C, np.ndarray
     ), f"Current simulation requires C to be a matrix. C is type {type(C)}"
     # Setup Training Tools
-    logger.info(f"Setting training fundamentals")
+    logger.info(f"Setting training fundamentals. With output dim: {training_data.output_dim} and state dim: {training_data.state_size}")
     # model = TransformerBlock(
     #     d_model, training_data.state_size, attn_heads, ff_hidden, dropout=dropout
     # ).to(device)
@@ -281,6 +295,10 @@ def train(
                 cur_state = trn_states[b * batch_size : (b + 1) * batch_size].to(device)
                 cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(device)
 
+                # DEBUG: Check the shapes
+                print(f"Shape of cur_state: {cur_state.shape}")
+                print(f"Shape of cur_output: {cur_output.shape}")
+
                 # Estimate the state
                 est_state = model(cur_output)
 
@@ -295,6 +313,7 @@ def train(
                 # Eval Reporting
                 e_report = None
                 if b % eval_interval == 0:
+                    ## Evaluate Model
                     e_report = eval_model(
                         model, criterion, batch_size, t_val_states, t_val_outputs
                     )
@@ -302,10 +321,22 @@ def train(
                     one_test_state = val_states[0:1, :, :].cpu().detach().numpy()
                     one_test_output = val_outputs[0:1, :, :]
                     preds = model(one_test_output).cpu().detach().numpy()
+                    one_test_output = one_test_output.cpu().detach().numpy()
 
+                    ## Use Kalman Filter for Solution of States as Comparison
+                    kf = KalmanFilter(
+                        transition_matrices=training_data.params[0],
+                        observation_matrices=training_data.params[2],
+                    )
+
+                    (filtered_mean, filtered_covariance) = kf.filter(one_test_output.squeeze())
+                    (smoothed_mean, smoothed_covariance) = kf.smooth(one_test_output.squeeze())
+
+                    # logger.info(f"Meep {smoothed_mean.shape}")
                     plot_states(
                         preds[0:1, :, :],
                         one_test_state[0:1, :, :],
+                        smoothed_mean[np.newaxis, :, :],
                         save_path=f"{plot_dest}/plot_{timestamp}_{e}_{b}.png",
                         first_n_states=3,
                     )
@@ -382,19 +413,19 @@ def generate_dataset(
         logger.info(f"Loading dataset from {cache_path}")
         final_dataset = pd.read_csv(cache_path)
         # Read the json file to get the metadata
-        with open(cache_path.replace(".csv", ".json"), "r") as f:
-            metadata = json.load(f)
-            state_dim = metadata["state_size"]
-            output_dim = metadata["output_dim"]
-            ds_size = metadata["ds_size"]
-            time_steps = metadata["time_steps"]
+        with open(cache_path.replace(".csv", ".pkl"), "rb") as f:
+            train_data = pickle.load(f)
+            state_dim = train_data.state_size
+            output_dim = train_data.output_dim
+            ds_size = train_data.ds_size
+            time_steps = train_data.time_steps
         hiddens = (
             final_dataset.iloc[:, :state_dim]
             .values.reshape((ds_size, time_steps, state_dim))
             .astype(np.float32)
         )
         outputs = (
-            final_dataset.iloc[:, state_dim:]
+           final_dataset.iloc[:, state_dim:]
             .values.reshape((ds_size, time_steps, output_dim))
             .astype(np.float32)
         )
@@ -424,6 +455,7 @@ def generate_dataset(
     outputs = pd.DataFrame(outputs_final, columns=columns[state_dim:]) # type: ignore
     final_dataset = pd.concat([hiddens, outputs], axis=1)
     final_dataset.to_csv(cache_path, index=False)
+    
     # Save metadata to json file
     # json_file = cache_path.replace(".csv", ".json")
     # metadata = {
@@ -435,6 +467,7 @@ def generate_dataset(
     # }
     # with open(json_file, "w") as f:
     #     json.dump(metadata, f)
+
     train_data = TrainingData(params, state_dim, output_dim, time_steps, ds_size)
     pkl_file = cache_path.replace(".csv", ".pkl")
     pickle.dump(train_data, open(pkl_file, "wb"))
@@ -449,6 +482,7 @@ def main():
     np.random.seed(int(time.time()))
 
     logger.info(f"Generating dataset")
+
     # TODO: Make it  so that generate_dataset checks if params are the same
     hidden, outputs, training_data = generate_dataset(
         params,
