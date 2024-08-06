@@ -18,6 +18,7 @@ from conrecon.models.transformers import TransformerBlock, TorchsTransformer
 from torch.nn import TransformerEncoder
 from torch.nn import TransformerEncoderLayer
 from conrecon.utils import create_logger
+from conrecon.dplearning.vae import VAE
 from pykalman import KalmanFilter
 from rich import inspect
 from rich.console import Console
@@ -36,7 +37,7 @@ SSParam = Tuple[
 ]
 # Create a data class that stores info to be stored as npy
 @dataclass
-class TrainingData:
+class TrainingMetaData:
     params: SSParam
     state_size: int
     output_dim: int
@@ -104,6 +105,29 @@ def plot_states(
 
     # Rather than showing them save them to a file
     # plt.show()
+    plt.savefig(save_path)
+    plt.close()
+
+def plot_reconstruction(
+    og_output: np.ndarray,
+    recon_output: np.ndarray,
+    save_path: str,
+    ):
+
+    assert (
+        len(og_output.shape) == 2
+        and len(recon_output.shape) == 2
+    ), "Can only plot up to 2 outputs. Received shape {og_output.shape}"
+    # Now similarily ot above we plot to a figure we then save.
+    fig = plt.figure()
+    # Get subplotbase to pass below
+    fig, ax = plt.subplots()
+    ax.plot(og_output[0, :], label="True")
+    ax.plot(recon_output[0, :], label="Reconstruction")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Output")
+    ax.set_title("Reconstruction")
+    ax.legend()
     plt.savefig(save_path)
     plt.close()
 
@@ -217,7 +241,7 @@ def train(
     epochs: int,
     eval_interval: int,
     data: Tuple[torch.Tensor, torch.Tensor],
-    training_data: TrainingData,
+    training_data: TrainingMetaData,
     plot_dest: str,
     lr: float = 0.001,
     num_layers: int = 4,
@@ -404,7 +428,7 @@ def generate_dataset(
     output_dim: int,
     time_steps: int,
     ds_size: int,
-) -> Tuple[np.ndarray, np.ndarray, TrainingData]:
+) -> Tuple[np.ndarray, np.ndarray, TrainingMetaData]:
     # This will generate batch_size at a time and save as a dataset
     columns = [f"h{i}" for i in range(state_dim)]
     columns += [f"y{i}" for i in range(output_dim)]
@@ -429,7 +453,7 @@ def generate_dataset(
             .values.reshape((ds_size, time_steps, output_dim))
             .astype(np.float32)
         )
-        train_data = TrainingData(params, state_dim, output_dim, time_steps, ds_size)
+        train_data = TrainingMetaData(params, state_dim, output_dim, time_steps, ds_size)
         return hiddens, outputs, train_data
 
     logger.info(f"Generating dataset to {cache_path}")
@@ -468,11 +492,77 @@ def generate_dataset(
     # with open(json_file, "w") as f:
     #     json.dump(metadata, f)
 
-    train_data = TrainingData(params, state_dim, output_dim, time_steps, ds_size)
+    train_data = TrainingMetaData(params, state_dim, output_dim, time_steps, ds_size)
     pkl_file = cache_path.replace(".csv", ".pkl")
     pickle.dump(train_data, open(pkl_file, "wb"))
 
     return hiddens.values, outputs.values, train_data
+
+def train_VAE(
+    training_data: np.ndarray,
+    lr: float = 0.001,
+    batch_size: int = 32,
+    latent_size: int = 10,
+    hidden_size: int = 32,
+    train_test_split: float = 0.8,
+    epochs: int = 10,
+):
+    # Create directory if does not exists
+    os.makedirs("./figures/vaerecon/", exist_ok=True)
+
+    logger.info(f"Size of trainign data is {training_data.shape}")
+    # Training data will be outputs of the system
+    vae = VAE(
+        input_size=training_data.shape[1],
+        latent_size=latent_size,
+        hidden_size=hidden_size,
+    )
+    actual_train_data = training_data[: int(len(training_data) * train_test_split)]
+    actual_test_data = training_data[int(len(training_data) * train_test_split) :]
+    logger.info(f"Size of actual train data is {actual_train_data.shape}")
+    logger.info(f"Size of actual test data is {actual_test_data.shape}")
+    # Setup the optimizer
+    loss_fn = nn.MSELoss()
+    optim = torch.optim.Adam(vae.parameters(), lr=lr)
+    batch_count = int(len(actual_train_data) / batch_size)
+    for epoch in tqdm(range(epochs)):
+        for i in range(batch_count):
+            xdata = actual_train_data[i * batch_size : (i + 1) * batch_size]
+            optim.zero_grad()
+            inference = vae(xdata)
+            loss = loss_fn(inference, xdata) + vae.kl
+            loss.backward()
+            optim.step()
+        vae.eval()
+        plot_reconstruction(
+                actual_train_data[0:1, :, :],
+                vae(actual_train_data[0:1, :, :]),
+                f"./figures/vaerecon/plot_vaerecon_train_{epoch}.png"
+        )
+        vae.train()
+    # Now we run it on validation data and try to get the reconstruction error
+    vae.eval()
+    batch_count = int(len(actual_test_data) / batch_size)
+    eval_loss = 0
+    for i in range(batch_count):
+        xdata = actual_test_data[i * batch_size : (i + 1) * batch_size]
+        inference = vae(xdata)
+        loss = loss_fn(inference, xdata) + vae.kl
+        eval_loss += loss.item()
+        logger.debug(f"Reconstruction Error is {loss.item()}")
+    eval_loss /= batch_count
+    logger.info(f"Reconstruction Error is {eval_loss}")
+    # Now we Take a single instance and plot the reconstruction
+    single_instance = actual_test_data[0:1]
+    reconstruction = vae(single_instance)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    plot_reconstruction(
+        single_instance[0:1, :, :],
+        reconstruction[0:1, :, :],
+        "./figures/vaerecon/"
+        f"plot_vaerecon_eval_{timestamp}_.png"
+    )
+
 
 def main():
     args = argsies()
@@ -492,6 +582,10 @@ def main():
         args.time_steps,
         args.ds_size,
     )
+
+    # With the Dataset in Place we Also Generate a Variational Autoencoder
+    vae = train_VAE(outputs)
+    exit()
 
     # Merge metadata into args
     print(f"Training with args {args}")
