@@ -3,28 +3,31 @@ import json
 import os
 import pickle
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Generator, Iterable, List, Optional, Tuple
 
-from rich.live import Live
-from conrecon.plotting import TrainLayout
 import control as ct
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-from conrecon.automated_generation import generate_state_space_system
-from conrecon.models.transformers import TransformerBlock, TorchsTransformer
-from torch.nn import TransformerEncoder
-from torch.nn import TransformerEncoderLayer
-from conrecon.utils import create_logger
-from conrecon.dplearning.vae import VAE
 from pykalman import KalmanFilter
 from rich import inspect
 from rich.console import Console
+from rich.live import Live
 from torch import nn, tensor
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from tqdm import tqdm
-from dataclasses import dataclass
+
+from conrecon.automated_generation import generate_state_space_system
+from conrecon.dplearning.vae import VAE, FlexibleVAE, RecurrentVAE
+from conrecon.models.transformers import TorchsTransformer, TransformerBlock
+from conrecon.plotting import TrainLayout
+from conrecon.utils import create_logger
+from rich import traceback
+
+traceback.install()
 
 console = Console()
 
@@ -35,6 +38,8 @@ SSParam = Tuple[
     Optional[np.ndarray],
     Optional[np.ndarray],
 ]
+
+
 # Create a data class that stores info to be stored as npy
 @dataclass
 class TrainingMetaData:
@@ -43,7 +48,8 @@ class TrainingMetaData:
     output_dim: int
     time_steps: int
     ds_size: int
-        
+
+
 logger = create_logger("__main__")
 
 
@@ -108,15 +114,15 @@ def plot_states(
     plt.savefig(save_path)
     plt.close()
 
+
 def plot_reconstruction(
     og_output: np.ndarray,
     recon_output: np.ndarray,
     save_path: str,
-    ):
+):
 
     assert (
-        len(og_output.shape) == 2
-        and len(recon_output.shape) == 2
+        len(og_output.shape) == 2 and len(recon_output.shape) == 2
     ), "Can only plot up to 2 outputs. Received shape {og_output.shape}"
     # Now similarily ot above we plot to a figure we then save.
     fig = plt.figure()
@@ -135,9 +141,15 @@ def plot_reconstruction(
 def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     # State stuff here
-    ap.add_argument("-e", "--epochs", default=3, help="How many epochs to train for", type=int)
-    ap.add_argument( "--num_layers", default=1, help="How many epochs to train for", type=int)
-    ap.add_argument("--eval_interval", default=100, help="How many epochs to train for", type=int)
+    ap.add_argument(
+        "-e", "--epochs", default=3, help="How many epochs to train for", type=int
+    )
+    ap.add_argument(
+        "--num_layers", default=1, help="How many epochs to train for", type=int
+    )
+    ap.add_argument(
+        "--eval_interval", default=100, help="How many epochs to train for", type=int
+    )
     ap.add_argument(
         "-n", "--num_samples", default=4, type=int, help="How many Samples to Evaluate"
     )
@@ -210,9 +222,7 @@ def argsies() -> argparse.Namespace:
 
 def design_matrices() -> SSParam:
     random_state = np.random.RandomState(0)
-    A = [[1.0, 0.1, 0.0],
-         [0.0, 0.2, 0.3],
-         [0.0, 0.0, 0.8]]
+    A = [[1.0, 0.1, 0.0], [0.0, 0.2, 0.3], [0.0, 0.0, 0.8]]
 
     C = np.eye(3)[:2, :] + random_state.randn(2, 3) * 0.1
     A = np.array(A)
@@ -227,7 +237,7 @@ def eval_model(
     t_val_states: torch.Tensor,
     t_val_outputs: torch.Tensor,
 ):
-    
+
     batch_count = int(len(t_val_states) / batch_size)
     model.eval()
     for b in range(batch_count):
@@ -237,6 +247,7 @@ def eval_model(
         loss = criterion(preds, states)
         return loss.item()
 
+
 def train(
     epochs: int,
     eval_interval: int,
@@ -245,14 +256,14 @@ def train(
     plot_dest: str,
     lr: float = 0.001,
     num_layers: int = 4,
-    tt_split : float = 0.8,
+    tt_split: float = 0.8,
     d_model: int = 128,
     attn_heads: int = 8,
     ff_hidden: int = 256,
     dropout: float = 0.1,
     batch_size: int = 16,
 ):
-    # Dta Management 
+    # Dta Management
     states, outputs = data
     device = states.device
     logger.info(f"Device is {device}")
@@ -276,7 +287,9 @@ def train(
         C, np.ndarray
     ), f"Current simulation requires C to be a matrix. C is type {type(C)}"
     # Setup Training Tools
-    logger.info(f"Setting training fundamentals. With output dim: {training_data.output_dim} and state dim: {training_data.state_size}")
+    logger.info(
+        f"Setting training fundamentals. With output dim: {training_data.output_dim} and state dim: {training_data.state_size}"
+    )
     # model = TransformerBlock(
     #     d_model, training_data.state_size, attn_heads, ff_hidden, dropout=dropout
     # ).to(device)
@@ -297,9 +310,7 @@ def train(
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_list = []
-    kf = KalmanFilter(
-        transition_matrices=A, observation_matrices=C
-    )
+    kf = KalmanFilter(transition_matrices=A, observation_matrices=C)
 
     loss_list = []
     eval_data = []
@@ -309,7 +320,9 @@ def train(
     # Generate the simulations
     # We will use rich for reporting this??
     # f = Live(train_layout.layout, console=console, refresh_per_second=10)
-    logger.info(f"Beginning Training iwht {epochs} epochs and batch size of {batch_size} resulting in {batch_count} batches")
+    logger.info(
+        f"Beginning Training iwht {epochs} epochs and batch size of {batch_size} resulting in {batch_count} batches"
+    )
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     with Live(train_layout.layout, console=console, refresh_per_second=10) as live:
         for e in range(epochs):
@@ -317,7 +330,9 @@ def train(
             for b in range(batch_count):
 
                 cur_state = trn_states[b * batch_size : (b + 1) * batch_size].to(device)
-                cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(device)
+                cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(
+                    device
+                )
 
                 # DEBUG: Check the shapes
                 print(f"Shape of cur_state: {cur_state.shape}")
@@ -353,8 +368,12 @@ def train(
                         observation_matrices=training_data.params[2],
                     )
 
-                    (filtered_mean, filtered_covariance) = kf.filter(one_test_output.squeeze())
-                    (smoothed_mean, smoothed_covariance) = kf.smooth(one_test_output.squeeze())
+                    (filtered_mean, filtered_covariance) = kf.filter(
+                        one_test_output.squeeze()
+                    )
+                    (smoothed_mean, smoothed_covariance) = kf.smooth(
+                        one_test_output.squeeze()
+                    )
 
                     # logger.info(f"Meep {smoothed_mean.shape}")
                     plot_states(
@@ -449,11 +468,13 @@ def generate_dataset(
             .astype(np.float32)
         )
         outputs = (
-           final_dataset.iloc[:, state_dim:]
+            final_dataset.iloc[:, state_dim:]
             .values.reshape((ds_size, time_steps, output_dim))
             .astype(np.float32)
         )
-        train_data = TrainingMetaData(params, state_dim, output_dim, time_steps, ds_size)
+        train_data = TrainingMetaData(
+            params, state_dim, output_dim, time_steps, ds_size
+        )
         return hiddens, outputs, train_data
 
     logger.info(f"Generating dataset to {cache_path}")
@@ -475,11 +496,14 @@ def generate_dataset(
     hiddens_final = hiddens.reshape((ds_size * time_steps, state_dim))
     outputs_final = outputs.reshape((ds_size * time_steps, output_dim))
     # Form hiddens and outputs into a dataframe
-    hiddens = pd.DataFrame( hiddens_final, columns=columns[:state_dim],) # type: ignore
-    outputs = pd.DataFrame(outputs_final, columns=columns[state_dim:]) # type: ignore
+    hiddens = pd.DataFrame(
+        hiddens_final,
+        columns=columns[:state_dim],
+    )  # type: ignore
+    outputs = pd.DataFrame(outputs_final, columns=columns[state_dim:])  # type: ignore
     final_dataset = pd.concat([hiddens, outputs], axis=1)
     final_dataset.to_csv(cache_path, index=False)
-    
+
     # Save metadata to json file
     # json_file = cache_path.replace(".csv", ".json")
     # metadata = {
@@ -498,12 +522,14 @@ def generate_dataset(
 
     return hiddens.values, outputs.values, train_data
 
+
 def train_VAE(
     training_data: np.ndarray,
     lr: float = 0.001,
     batch_size: int = 32,
     latent_size: int = 10,
     hidden_size: int = 32,
+    rnn_hiddensize: int = 32,
     train_test_split: float = 0.8,
     epochs: int = 10,
 ):
@@ -512,11 +538,21 @@ def train_VAE(
 
     logger.info(f"Size of trainign data is {training_data.shape}")
     # Training data will be outputs of the system
-    vae = VAE(
-        input_size=training_data.shape[1],
+
+    # vae = RecurrentVAE(
+    #     input_size=training_data.shape[2],
+    #     latent_size=latent_size,
+    #     rrnhidden_size=rnn_hiddensize,
+    #     sequence_length=training_data.shape[1],
+    # )
+
+    vae = FlexibleVAE(
+        input_size=training_data.shape[2],
         latent_size=latent_size,
         hidden_size=hidden_size,
     )
+    plot_sample = training_data[0:1, :, :]
+
     actual_train_data = training_data[: int(len(training_data) * train_test_split)]
     actual_test_data = training_data[int(len(training_data) * train_test_split) :]
     logger.info(f"Size of actual train data is {actual_train_data.shape}")
@@ -528,16 +564,20 @@ def train_VAE(
     for epoch in tqdm(range(epochs)):
         for i in range(batch_count):
             xdata = actual_train_data[i * batch_size : (i + 1) * batch_size]
+            t_xdata  = torch.from_numpy(xdata).to(torch.float32)
+            logger.info(f"Information of t_xdata before being sent {t_xdata.shape}")
             optim.zero_grad()
-            inference = vae(xdata)
-            loss = loss_fn(inference, xdata) + vae.kl
+            inference = vae(t_xdata)
+            logger.debug(f"Inference shape is {inference.shape} and truth shape is {xdata.shape}")
+            logger.debug(f"And their types are {type(inference)} and {type(xdata)}")
+            loss = loss_fn(inference, t_xdata) + vae.kl
             loss.backward()
             optim.step()
         vae.eval()
         plot_reconstruction(
-                actual_train_data[0:1, :, :],
-                vae(actual_train_data[0:1, :, :]),
-                f"./figures/vaerecon/plot_vaerecon_train_{epoch}.png"
+            plot_sample,
+            vae(torch.from_numpy(plot_sample).to(torch.float32)),
+            f"./figures/vaerecon/plot_vaerecon_train_{epoch}.png",
         )
         vae.train()
     # Now we run it on validation data and try to get the reconstruction error
@@ -559,8 +599,7 @@ def train_VAE(
     plot_reconstruction(
         single_instance[0:1, :, :],
         reconstruction[0:1, :, :],
-        "./figures/vaerecon/"
-        f"plot_vaerecon_eval_{timestamp}_.png"
+        "./figures/vaerecon/" f"plot_vaerecon_eval_{timestamp}_.png",
     )
 
 
@@ -594,7 +633,9 @@ def main():
         torch.from_numpy(hidden).to(torch.float32).to(device),
         torch.from_numpy(outputs).to(torch.float32).to(device),
     )
-    logger.info(f"Training with type of hiddens {type(t_hidden)} and outputs {type(t_outputs)}")
+    logger.info(
+        f"Training with type of hiddens {type(t_hidden)} and outputs {type(t_outputs)}"
+    )
     results = train(
         args.epochs,
         args.eval_interval,
