@@ -7,7 +7,7 @@ import control as ct
 import matplotlib.pyplot as plt
 import numpy as np
 from conrecon.automated_generation import generate_state_space_system
-from pykalman import KalmanFilter
+from sktime.libs.pykalman import KalmanFilter
 from rich import inspect
 from rich.console import Console
 from conrecon.utils import create_logger

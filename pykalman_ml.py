@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-from pykalman import KalmanFilter
+from sktime.libs.pykalman import KalmanFilter
 from rich import inspect
 from rich.console import Console
 from rich.live import Live
