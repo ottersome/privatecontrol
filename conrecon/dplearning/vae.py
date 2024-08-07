@@ -19,8 +19,8 @@ class VAE(nn.Module):
         self.fc4 = nn.Linear(hidden_size, input_size)
 
         self.N = Normal(torch.zeros(latent_size), torch.ones(latent_size))
-        self.N.loc = self.N.loc.cuda()
-        self.N.scale = self.N.scale.cuda()
+        # self.N.loc = self.N.loc.cuda()
+        # self.N.scale = self.N.scale.cuda()
         self.kl = 0
 
     def encode(self, x):
@@ -64,8 +64,8 @@ class RecurrentVAE(nn.Module):
         self.lstm_decoder = nn.LSTM(hidden_size, input_size, batch_first=True)
 
         self.N = Normal(torch.zeros(latent_size), torch.ones(latent_size))
-        self.N.loc = self.N.loc.cuda()
-        self.N.scale = self.N.scale.cuda()
+        # self.N.loc = self.N.loc.cuda()
+        # self.N.scale = self.N.scale.cuda()
         self.kl = 0
 
     def encode(self, x):
