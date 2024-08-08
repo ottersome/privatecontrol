@@ -241,9 +241,10 @@ def eval_model(
 def train(
     epochs: int,
     eval_interval: int,
-    data: Tuple[torch.Tensor, torch.Tensor],
-    training_data: TrainingMetaData,
+    learning_data: Tuple[torch.Tensor, torch.Tensor],
+    metadata: TrainingMetaData,
     plot_dest: str,
+    vae: nn.Module,
     lr: float = 0.001,
     num_layers: int = 4,
     tt_split: float = 0.8,
@@ -253,8 +254,8 @@ def train(
     dropout: float = 0.1,
     batch_size: int = 16,
 ):
-    # Dta Management
-    states, outputs = data
+    # Data Management
+    states, outputs = learning_data
     device = states.device
     logger.info(f"Device is {device}")
     tstates, toutputs = tensor(states), tensor(outputs)
@@ -269,7 +270,7 @@ def train(
     t_val_states, t_val_outputs = tensor(val_states), tensor(val_outputs)
 
     # Ensure data is correct
-    A, _, C, _ = training_data.params
+    A, _, C, _ = metadata.params
     assert isinstance(
         A, np.ndarray
     ), f"Current simulation requires A to be a matrix. A is type {type(A)}"
@@ -278,15 +279,15 @@ def train(
     ), f"Current simulation requires C to be a matrix. C is type {type(C)}"
     # Setup Training Tools
     logger.info(
-        f"Setting training fundamentals. With output dim: {training_data.output_dim} and state dim: {training_data.state_size}"
+        f"Setting training fundamentals. With output dim: {metadata.output_dim} and state dim: {metadata.state_size}"
     )
     # model = TransformerBlock(
     #     d_model, training_data.state_size, attn_heads, ff_hidden, dropout=dropout
     # ).to(device)
     model = TorchsTransformer(
         d_model,
-        training_data.output_dim,
-        training_data.state_size,
+        metadata.output_dim,
+        metadata.state_size,
         attn_heads,
         ff_hidden,
         dropout=dropout,
@@ -298,7 +299,7 @@ def train(
         f"Model is of type {type(model)} with device {next(model.parameters()).device}"
     )
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr) # type: ignore
     loss_list = []
     kf = KalmanFilter(transition_matrices=A, observation_matrices=C)
 
@@ -354,8 +355,8 @@ def train(
 
                     ## Use Kalman Filter for Solution of States as Comparison
                     kf = KalmanFilter(
-                        transition_matrices=training_data.params[0],
-                        observation_matrices=training_data.params[2],
+                        transition_matrices=metadata.params[0],
+                        observation_matrices=metadata.params[2],
                     )
 
                     (filtered_mean, filtered_covariance) = kf.filter(
