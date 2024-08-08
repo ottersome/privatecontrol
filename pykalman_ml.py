@@ -506,23 +506,22 @@ def generate_dataset(
     final_dataset = pd.concat([hiddens, outputs], axis=1)
     final_dataset.to_csv(cache_path, index=False)
 
-    # Save metadata to json file
-    # json_file = cache_path.replace(".csv", ".json")
-    # metadata = {
-    #     "state_size": state_dim,
-    #     "output_dim": output_dim,
-    #     "input_dim": input_dim,
-    #     "time_steps": time_steps,
-    #     "ds_size": ds_size,
-    # }
-    # with open(json_file, "w") as f:
-    #     json.dump(metadata, f)
-
     train_data = TrainingMetaData(params, state_dim, output_dim, time_steps, ds_size)
     pkl_file = cache_path.replace(".csv", ".pkl")
     pickle.dump(train_data, open(pkl_file, "wb"))
 
-    return hiddens.values, outputs.values, train_data
+    hiddens = (
+        final_dataset.iloc[:, :state_dim]
+        .values.reshape((ds_size, time_steps, state_dim))
+        .astype(np.float32)
+    )
+    outputs = (
+        final_dataset.iloc[:, state_dim:]
+        .values.reshape((ds_size, time_steps, output_dim))
+        .astype(np.float32)
+    )
+
+    return hiddens, outputs, train_data
 
 
 def train_VAE(
