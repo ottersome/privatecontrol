@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Generator, Iterable, List, Optional, Tuple
+import pdb
 
 import control as ct
 import matplotlib.pyplot as plt
@@ -122,22 +123,37 @@ def plot_reconstruction(
 ):
 
     assert (
-        len(og_output.shape) == 2 and len(recon_output.shape) == 2
+        len(og_output.shape) == 3 and len(recon_output.shape) == 3
     ), f"Can only plot up to 2 outputs. Received shape {og_output.shape}"
+    if og_output.shape[0] > 4:
+        logger.warn("You might be plotting too many functions")
     if isinstance(recon_output, torch.Tensor):
         recon_output = recon_output.detach().cpu().numpy()
-    # Now similarily ot above we plot to a figure we then save.
-    fig = plt.figure()
-    # Get subplotbase to pass below
+
     fig, ax = plt.subplots()
-    ax.plot(og_output[0, :], label="True")
-    ax.plot(recon_output[0, :], label="Reconstruction")
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Output")
-    ax.set_title("Reconstruction")
-    ax.legend()
+    fig.set_figwidth(12)
+    fig.set_figheight(8)
+    plt.tight_layout()
+
+    color_map = plt.get_cmap("tab10")
+    for s in range(og_output.shape[0]):
+        # Get subplotbase to pass below
+        logger.debug(f"Plotting the {s}th plot")
+        logger.debug(f"\tWith :{og_output[s,:,0]}")
+        logger.debug(f"\and :{recon_output[s,:,0]}")
+        cmap_float_idx = s / (og_output.shape[0] - 1)
+        color = color_map(cmap_float_idx)
+        ax.plot(og_output[s, :, 0], label=f"True $f_{0}$", color=color)
+        ax.plot(
+            recon_output[s, :, 0], label="Reconstruction", color=color, linestyle="--"
+        )
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Output")
+        ax.set_title("Reconstruction")
+        ax.legend()
     plt.savefig(save_path)
     plt.close()
+
 
 
 def argsies() -> argparse.Namespace:
@@ -473,7 +489,7 @@ def generate_dataset(
     # Form hiddens and outputs into a dataframe
     hiddens = pd.DataFrame(
         hiddens_final,
-        columns=columns[:state_dim],
+        columns=columns[:state_dim], # type: ignore
     )  # type: ignore
     outputs = pd.DataFrame(outputs_final, columns=columns[state_dim:])  # type: ignore
     final_dataset = pd.concat([hiddens, outputs], axis=1)
@@ -503,7 +519,6 @@ def train_VAE(
     batch_size: int = 32,
     latent_size: int = 10,
     hidden_size: int = 32,
-    rnn_hiddensize: int = 32,
     train_test_split: float = 0.8,
     epochs: int = 10,
 ):
@@ -519,7 +534,7 @@ def train_VAE(
         latent_size=latent_size,
         hidden_size=hidden_size,
     )
-    plot_sample = training_data[0:1, :, :]
+    plot_samples = training_data[:4, :, :]
 
     actual_train_data = training_data[: int(len(training_data) * train_test_split)]
     actual_test_data = training_data[int(len(training_data) * train_test_split) :]
@@ -527,9 +542,11 @@ def train_VAE(
     logger.info(f"Size of actual test data is {actual_test_data.shape}")
     # Setup the optimizer
     loss_fn = nn.MSELoss()
-    optim = torch.optim.Adam(vae.parameters(), lr=lr)
+    optim = torch.optim.Adam(vae.parameters(), lr=lr) # type: ignore
     batch_count = int(len(actual_train_data) / batch_size)
+    training_losses = []
     for epoch in tqdm(range(epochs)):
+        bloss = 0
         for i in range(batch_count):
             xdata = actual_train_data[i * batch_size : (i + 1) * batch_size]
             t_xdata  = torch.from_numpy(xdata).to(torch.float32)
@@ -537,14 +554,25 @@ def train_VAE(
             inference = vae(t_xdata)
             loss = loss_fn(inference, t_xdata) + vae.kl
             loss.backward()
+            bloss += loss.item()
             optim.step()
         vae.eval()
+        bloss /= batch_count
+        training_losses.append(bloss)
         plot_reconstruction(
-            plot_sample.squeeze(),
-            vae(torch.from_numpy(plot_sample).to(torch.float32)).squeeze(),
+            plot_samples,
+            vae(torch.from_numpy(plot_samples).to(torch.float32)).squeeze(),
             f"./figures/vaerecon/plot_vaerecon_train_{epoch}.png",
         )
         vae.train()
+
+    ## Crate plot for training losses
+    _, ax = plt.subplots()
+    ax.plot(training_losses)
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Training Loss")
+    ax.set_title("Training Loss")
+    plt.savefig(f"./figures/vaerecon/plot_vaerecon_train_loss.png")
     # Now we run it on validation data and try to get the reconstruction error
     vae.eval()
     batch_count = int(len(actual_test_data) / batch_size)
@@ -559,12 +587,12 @@ def train_VAE(
     eval_loss /= batch_count
     logger.info(f"Reconstruction Error is {eval_loss}")
     # Now we Take a single instance and plot the reconstruction
-    single_instance = actual_test_data[0:1]
+    single_instance = actual_test_data[:4]
     reconstruction = vae(torch.from_numpy(single_instance).to(torch.float32))
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     plot_reconstruction(
-        single_instance[0:1, :, :].squeeze(),
-        reconstruction[0:1, :, :].squeeze(),
+        single_instance.squeeze(),
+        reconstruction.squeeze(),
         "./figures/vaerecon/" f"plot_vaerecon_eval_{timestamp}_.png",
     )
 
@@ -612,6 +640,7 @@ def main():
         lr=args.lr,
     )
 
+    ## ML-Approach
 
 
 if __name__ == "__main__":
