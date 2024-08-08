@@ -78,7 +78,7 @@ class FlexibleVAE(nn.Module):
 
     def decode(self, z):
         h3 = F.relu(self.fc3(z))
-        return torch.sigmoid(self.fc4(h3))
+        return self.fc4(h3)
 
     def forward(self, x):
         mu, sigma = self.encode(x)
