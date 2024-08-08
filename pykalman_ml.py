@@ -50,7 +50,7 @@ class TrainingMetaData:
     ds_size: int
 
 
-logger = create_logger("__main__")
+logger = create_logger("pykalman_ml")
 
 
 def plot_states(
@@ -123,7 +123,9 @@ def plot_reconstruction(
 
     assert (
         len(og_output.shape) == 2 and len(recon_output.shape) == 2
-    ), "Can only plot up to 2 outputs. Received shape {og_output.shape}"
+    ), f"Can only plot up to 2 outputs. Received shape {og_output.shape}"
+    if isinstance(recon_output, torch.Tensor):
+        recon_output = recon_output.detach().cpu().numpy()
     # Now similarily ot above we plot to a figure we then save.
     fig = plt.figure()
     # Get subplotbase to pass below
@@ -539,13 +541,7 @@ def train_VAE(
     logger.info(f"Size of trainign data is {training_data.shape}")
     # Training data will be outputs of the system
 
-    # vae = RecurrentVAE(
-    #     input_size=training_data.shape[2],
-    #     latent_size=latent_size,
-    #     rrnhidden_size=rnn_hiddensize,
-    #     sequence_length=training_data.shape[1],
-    # )
-
+    logger.debug(f"training_data shape is {training_data.shape}")
     vae = FlexibleVAE(
         input_size=training_data.shape[2],
         latent_size=latent_size,
@@ -565,18 +561,15 @@ def train_VAE(
         for i in range(batch_count):
             xdata = actual_train_data[i * batch_size : (i + 1) * batch_size]
             t_xdata  = torch.from_numpy(xdata).to(torch.float32)
-            logger.info(f"Information of t_xdata before being sent {t_xdata.shape}")
             optim.zero_grad()
             inference = vae(t_xdata)
-            logger.debug(f"Inference shape is {inference.shape} and truth shape is {xdata.shape}")
-            logger.debug(f"And their types are {type(inference)} and {type(xdata)}")
             loss = loss_fn(inference, t_xdata) + vae.kl
             loss.backward()
             optim.step()
         vae.eval()
         plot_reconstruction(
-            plot_sample,
-            vae(torch.from_numpy(plot_sample).to(torch.float32)),
+            plot_sample.squeeze(),
+            vae(torch.from_numpy(plot_sample).to(torch.float32)).squeeze(),
             f"./figures/vaerecon/plot_vaerecon_train_{epoch}.png",
         )
         vae.train()
@@ -586,19 +579,20 @@ def train_VAE(
     eval_loss = 0
     for i in range(batch_count):
         xdata = actual_test_data[i * batch_size : (i + 1) * batch_size]
-        inference = vae(xdata)
-        loss = loss_fn(inference, xdata) + vae.kl
+        t_xdata = torch.from_numpy(xdata).to(torch.float32)
+        inference = vae(t_xdata)
+        loss = loss_fn(inference, t_xdata) + vae.kl
         eval_loss += loss.item()
         logger.debug(f"Reconstruction Error is {loss.item()}")
     eval_loss /= batch_count
     logger.info(f"Reconstruction Error is {eval_loss}")
     # Now we Take a single instance and plot the reconstruction
     single_instance = actual_test_data[0:1]
-    reconstruction = vae(single_instance)
+    reconstruction = vae(torch.from_numpy(single_instance).to(torch.float32))
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     plot_reconstruction(
-        single_instance[0:1, :, :],
-        reconstruction[0:1, :, :],
+        single_instance[0:1, :, :].squeeze(),
+        reconstruction[0:1, :, :].squeeze(),
         "./figures/vaerecon/" f"plot_vaerecon_eval_{timestamp}_.png",
     )
 

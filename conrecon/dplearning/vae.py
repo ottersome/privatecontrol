@@ -60,6 +60,7 @@ class FlexibleVAE(nn.Module):
     def encode(self, x):
         assert len(x.shape) == 3
         # Keep x i
+        self.logger.debug(f"Shape of x is {x.shape} and its type is {type(x)}")
         reshaped_x = x.view(-1, x.shape[-1])
         h1 = F.relu(self.fc1(reshaped_x))
         return self.fc21(h1), self.fc22(h1)
