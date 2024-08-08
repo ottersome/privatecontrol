@@ -1,22 +1,22 @@
 import argparse
 import json
 import os
+import pdb
 import pickle
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Generator, Iterable, List, Optional, Tuple
-import pdb
 
 import control as ct
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-from sktime.libs.pykalman import KalmanFilter
-from rich import inspect
+from rich import inspect, traceback
 from rich.console import Console
 from rich.live import Live
+from sktime.libs.pykalman import KalmanFilter
 from torch import nn, tensor
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from tqdm import tqdm
@@ -26,7 +26,6 @@ from conrecon.dplearning.vae import VAE, FlexibleVAE, RecurrentVAE
 from conrecon.models.transformers import TorchsTransformer, TransformerBlock
 from conrecon.plotting import TrainLayout
 from conrecon.utils import create_logger
-from rich import traceback
 
 traceback.install()
 
@@ -516,11 +515,12 @@ def generate_dataset(
 def train_VAE(
     training_data: np.ndarray,
     lr: float = 0.001,
-    batch_size: int = 32,
+    batch_size: int = 64,
     latent_size: int = 10,
-    hidden_size: int = 32,
+    hidden_size: int = 128,
     train_test_split: float = 0.8,
-    epochs: int = 10,
+    epochs: int = 10000,
+    eval_period: int = 1, # Once per epoch
 ):
     # Create directory if does not exists
     os.makedirs("./figures/vaerecon/", exist_ok=True)
@@ -545,6 +545,8 @@ def train_VAE(
     optim = torch.optim.Adam(vae.parameters(), lr=lr) # type: ignore
     batch_count = int(len(actual_train_data) / batch_size)
     training_losses = []
+    latest_eval_loss = 0
+    training_bar = tqdm(range(epochs), desc="Training VAE")
     for epoch in tqdm(range(epochs)):
         bloss = 0
         for i in range(batch_count):
@@ -552,19 +554,45 @@ def train_VAE(
             t_xdata  = torch.from_numpy(xdata).to(torch.float32)
             optim.zero_grad()
             inference = vae(t_xdata)
-            loss = loss_fn(inference, t_xdata) + vae.kl
+            loss = loss_fn(inference, t_xdata) #+ vae.kl
             loss.backward()
             bloss += loss.item()
             optim.step()
         vae.eval()
         bloss /= batch_count
+        training_bar.set_postfix({"Training Loss": bloss, "Latest Eval Loss": latest_eval_loss})
         training_losses.append(bloss)
         plot_reconstruction(
             plot_samples,
             vae(torch.from_numpy(plot_samples).to(torch.float32)).squeeze(),
             f"./figures/vaerecon/plot_vaerecon_train_{epoch}.png",
         )
-        vae.train()
+        if (epoch + 1) % eval_period == 0:
+            vae.eval()
+            batch_count = int(len(actual_test_data) / batch_size)
+            eval_loss = 0
+            for i in range(batch_count):
+                xdata = actual_test_data[i * batch_size : (i + 1) * batch_size]
+                t_xdata = torch.from_numpy(xdata).to(torch.float32)
+                inference = vae(t_xdata)
+                loss = loss_fn(inference, t_xdata) + vae.kl
+                eval_loss += loss.item()
+                logger.debug(f"Reconstruction Error is {loss.item()}")
+            eval_loss /= batch_count
+            latest_eval_loss = eval_loss
+            logger.debug(f"Reconstruction Eval Error is {eval_loss}")
+
+            # Plot some of them
+            single_instance = actual_test_data[:4]
+            reconstruction = vae(torch.from_numpy(single_instance).to(torch.float32))
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            plot_reconstruction(
+                single_instance.squeeze(),
+                reconstruction.squeeze(),
+                "./figures/vaerecon/" f"plot_vaerecon_eval_{timestamp}_.png",
+            )
+            vae.train()
+
 
     ## Crate plot for training losses
     _, ax = plt.subplots()
@@ -574,27 +602,6 @@ def train_VAE(
     ax.set_title("Training Loss")
     plt.savefig(f"./figures/vaerecon/plot_vaerecon_train_loss.png")
     # Now we run it on validation data and try to get the reconstruction error
-    vae.eval()
-    batch_count = int(len(actual_test_data) / batch_size)
-    eval_loss = 0
-    for i in range(batch_count):
-        xdata = actual_test_data[i * batch_size : (i + 1) * batch_size]
-        t_xdata = torch.from_numpy(xdata).to(torch.float32)
-        inference = vae(t_xdata)
-        loss = loss_fn(inference, t_xdata) + vae.kl
-        eval_loss += loss.item()
-        logger.debug(f"Reconstruction Error is {loss.item()}")
-    eval_loss /= batch_count
-    logger.info(f"Reconstruction Error is {eval_loss}")
-    # Now we Take a single instance and plot the reconstruction
-    single_instance = actual_test_data[:4]
-    reconstruction = vae(torch.from_numpy(single_instance).to(torch.float32))
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    plot_reconstruction(
-        single_instance.squeeze(),
-        reconstruction.squeeze(),
-        "./figures/vaerecon/" f"plot_vaerecon_eval_{timestamp}_.png",
-    )
 
 
 def main():
