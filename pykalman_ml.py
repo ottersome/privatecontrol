@@ -26,6 +26,7 @@ from conrecon.dplearning.vae import VAE, FlexibleVAE, RecurrentVAE
 from conrecon.models.transformers import TorchsTransformer, TransformerBlock
 from conrecon.plotting import TrainLayout
 from conrecon.utils import create_logger
+from conrecon.plotting import plot_functions
 
 traceback.install()
 
@@ -237,6 +238,124 @@ def eval_model(
         loss = criterion(preds, states)
         return loss.item()
 
+
+def normal_kalman_filter_guessing(
+    vae: nn.Module,
+    metadata: TrainingMetaData,
+    learning_data: Tuple[np.ndarray, np.ndarray],
+    epochs: int,
+    plot_dest: str,
+    batch_size = 64,
+    tt_split: float = 0.8,
+):
+
+    ### Data Management
+    states, outputs = learning_data
+    device = states.device
+    logger.info(f"Device is {device}")
+    tstates, toutputs = tensor(states), tensor(outputs)
+    trn_states, val_states = torch.split(
+        tstates,
+        [int(len(states) * tt_split), len(states) - int(len(states) * tt_split)],
+    )
+    trn_outputs, val_outputs = torch.split(
+        toutputs,
+        [int(len(outputs) * tt_split), len(outputs) - int(len(outputs) * tt_split)],
+    )
+    t_val_states, t_val_outputs = tensor(val_states), tensor(val_outputs)
+
+    ### Filter Data
+    A, _, C, _ = metadata.params
+    kf = KalmanFilter(transition_matrices=A, observation_matrices=C)
+    t_data, val_data = learning_data
+
+    kf = KalmanFilter(
+        transition_matrices=metadata.params[0],
+        observation_matrices=metadata.params[2],
+    )
+
+    ### Train the VAE
+    criterion = nn.MSELoss()  # TODO: Change this to something else
+    loss_list = []
+    eval_data = []
+    batch_count = int(len(t_data) / batch_size)
+    train_layout = TrainLayout(epochs, batch_count, loss_list, eval_data)
+    vae.eval()  ## TOREM: Remove when you have finished trying out the VAE on kalman filter
+    with Live(train_layout.layout, console=console, refresh_per_second=10) as live:
+        for e in range(epochs):
+            epoch_loss = 0
+            for b in range(batch_count):
+                ## Batch Wise Data
+                cur_state = t_data[b * batch_size : (b + 1) * batch_size]
+                cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(
+                    device
+                )
+                ## Change Data to HideStuff
+                masked_output = vae(cur_output)
+                state_estimates_w_vae = []
+                state_estimates_wo_vae = []
+
+                logger.debug(f"Tell em about the shape of the output {cur_output.shape} as well as its type {type(cur_output)}")
+                logger.debug(f"Shape of masked_output is {masked_output.shape} as well as its type {type(masked_output)}")
+
+                # Go Through Batch
+                for i in range(cur_output.shape[0]):
+                    # First without VAE
+                    (filtered_mean, filtered_covariance) = kf.filter(
+                        cur_output[i, :, :].squeeze().detach().cpu().numpy()
+                    )
+                    (smoothed_mean, smoothed_covariance) = kf.smooth(
+                        cur_output[i, :, :].squeeze().detach().cpu().numpy()
+                    )
+                    state_estimates_wo_vae.append(smoothed_mean)
+                    # Then for VAE
+                    (filtered_mean, filtered_covariance) = kf.filter(
+                        masked_output[i].squeeze().detach().cpu().numpy()
+                    )
+                    (smoothed_mean, smoothed_covariance) = kf.smooth(
+                        masked_output[i].squeeze().detach().cpu().numpy()
+                    )
+                    state_estimates_w_vae.append(smoothed_mean)
+                ## Try to do reconstruction of state
+                # state_estimates_wo_vae = torch.from_numpy(
+                #     np.array(state_estimates_wo_vae)
+                # ).to(device)
+                # state_estimates_w_vae = torch.from_numpy(
+                #     np.array(state_estimates_w_vae)
+                # ).to(device)
+                to_compare = [
+                    [state_estimates_wo_vae[e], state_estimates_w_vae[e]] for e in range(4)
+                ]
+                to_compare = np.array(to_compare)
+                logger.debug(f"Shape of to_compare is {to_compare.shape}")
+
+                ## Now we compare the reconstructions
+                # Take the mean across the sequence.
+                # Hopefully we see more differences in our prefered 
+                plot_functions(
+                    to_compare,
+                    f"./figures/pykalman_ml/newrecon_{e}_{b}.png",
+                    ["True", "Estimated"],
+                    first_n_states=3,
+                )
+
+                # diff = torch.abs(state_estimates_wo_vae - state_estimates_w_vae)
+                # Show the differences in a plot
+
+                ## TOREM: We will exit just trying stuff out for now
+                exit()
+
+                ## TODO: We need some sort of knob here to play with utility vs privacy
+                train_layout.update(e, b, cur_loss, e_report)
+
+            # Normal Reporting
+            if (e + 1) % 1 == 0:
+                print("Epoch: {}, Loss: {:.5f}".format(e + 1, epoch_loss))
+
+    # We test with MSE for reconstruction for now
+
+
+    
 
 def train(
     epochs: int,
@@ -520,9 +639,9 @@ def train_VAE(
     latent_size: int = 10,
     hidden_size: int = 128,
     train_test_split: float = 0.8,
-    epochs: int = 10000,
+    epochs: int = 3,
     eval_period: int = 1, # Once per epoch
-):
+) -> FlexibleVAE:
     # Create directory if does not exists
     os.makedirs("./figures/vaerecon/", exist_ok=True)
 
@@ -602,6 +721,7 @@ def train_VAE(
     ax.set_ylabel("Training Loss")
     ax.set_title("Training Loss")
     plt.savefig(f"./figures/vaerecon/plot_vaerecon_train_loss.png")
+    return vae
     # Now we run it on validation data and try to get the reconstruction error
 
 
@@ -626,7 +746,14 @@ def main():
 
     # With the Dataset in Place we Also Generate a Variational Autoencoder
     vae = train_VAE(outputs)
-    exit()
+
+    normal_kalman_filter_guessing(
+        vae,
+        training_data,
+        (hidden, outputs),
+        args.epochs,
+        args.saveplot_dest,
+    )
 
     # Merge metadata into args
     print(f"Training with args {args}")
@@ -641,8 +768,9 @@ def main():
     results = train(
         args.epochs,
         args.eval_interval,
-        data=(t_hidden, t_outputs),
-        training_data=training_data,
+        vae=vae,
+        learning_data=(t_hidden, t_outputs),
+        metadata=training_data,
         plot_dest=args.saveplot_dest,
         num_layers=args.num_layers,
         lr=args.lr,
