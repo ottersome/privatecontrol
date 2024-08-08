@@ -193,33 +193,6 @@ def argsies() -> argparse.Namespace:
     # Sanity check
 
 
-# TOREM: THis is an artifact from long ago
-# def get_sim(
-#     Amat: np.ndarray,
-#     Bmat: np.ndarray,
-#     Cmat: np.ndarray,
-#     init_cond: np.ndarray,
-#     time_length: int,
-#     input_dim: int,
-# ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-#     """
-#     Given the matrices, get states and outputs
-#     """
-#
-#     sys = ct.ss(Amat, Bmat, Cmat, 0)
-#     # CHECK: How do this limits affect the subsquent pykalman resultsG
-#     t = np.linspace(0, 10, time_length)
-#     u = np.zeros((input_dim, len(t)))
-#     # u[:, int(len(t) / 4)] = 1
-#     # TODO: think about this initial condition
-#     # Lets run the simulation and see what happens
-#     timepts = np.linspace(0, 10, time_length)
-#     response = ct.input_output_response(sys, timepts, u, X0=init_cond)  # type: ignore
-#     outputs = response.outputs
-#     states = response.states
-#     # inspect(outputs.shape)
-#     # inspect(states.shape)
-#     return states, outputs, init_cond
 
 
 def design_matrices() -> SSParam:
@@ -639,17 +612,6 @@ def main():
         lr=args.lr,
     )
 
-    ## ML-Approach
-
-    preds = np.array(preds)
-    # Now we plot the results
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    plot_states(
-        preds[0, :, :][np.newaxis, :],
-        hidden_truths[0, :, :][np.newaxis, :],
-        save_path=f"{args.saveplot_dest}/plot_{timestamp}.png",
-        first_n_states=args.first_n_states,
-    )
 
 
 if __name__ == "__main__":
