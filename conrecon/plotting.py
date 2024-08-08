@@ -1,7 +1,9 @@
 # All the imports
 import shutil
 from typing import List, Union
+import math
 
+from matplotlib import pyplot as plt
 import numpy as np
 from rich.console import Console
 from rich.layout import Layout
@@ -131,3 +133,58 @@ class TrainLayout:
             self.vplot.add_measurement(vloss)
         self.tplot.add_measurement(tloss)
         self.layout["table"].update(new_table)
+
+def plot_functions(
+    functions: np.ndarray,
+    save_path: str,
+    function_labels: List[str],
+    first_n_states: int = 3,
+    ):
+    """
+    Plots a set of functions in a grid of subplots
+    Args:
+        - functions: A numpy array of shape (num_independent_functions, num_functions, seq_length, dim)
+        - save_path: The path to save the figure to
+        - function_labels: A list of strings of length num_functions
+        - first_n_states: The number of states to show in the plot
+    Returns:
+        None
+    """
+    assert len(functions.shape) <= 4, "`plot_functions` Can only deal with up to 4D tensors"
+    while len(functions.shape) < 4:
+        functions = np.expand_dims(functions, axis=0)
+    assert len(function_labels) == functions.shape[1], "`plot_functions` Needs as many labels as functions"
+
+    num_independent_functions = functions.shape[0]
+    num_functions = functions.shape[1]
+    _ = functions.shape[2] # Seq_length
+    dim = functions.shape[3]
+    dim_to_show = min(dim, first_n_states)
+
+    # Do a grid configuration for independent functions
+    sqrt = math.ceil(np.sqrt(num_independent_functions))
+    _, ax = plt.subplots(
+        sqrt, sqrt, figsize=(sqrt * 6, sqrt * 6)
+    )
+    ax = np.atleast_2d(ax)  # type: ignore
+    plt.tight_layout()
+
+    colormap = plt.get_cmap("tab10")
+    lines_styles = ["-", "--", "-.", ":"]
+    for n in range(num_independent_functions):
+        i,j = n // sqrt, n % sqrt
+        for s in range(dim_to_show):
+            for f in range(num_functions):
+                ax[i, j].plot(
+                    functions[n, f, :, s],
+                    label=function_labels[f] + f"-$S_{s}$",
+                    linestyle=lines_styles[f],
+                    color=colormap(s),
+                )
+                ax[i, j].set_xlabel("Time")
+                ax[i, j].set_ylabel("Output")
+                ax[i, j].set_title(f"Output {n+1}")
+                ax[i, j].legend()
+    # Save the figure
+    plt.savefig(save_path)
+    plt.close()
