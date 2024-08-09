@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+from torch.nn import functional as F
 from rich import inspect, traceback
 from rich.console import Console
 from rich.live import Live
@@ -239,7 +240,7 @@ def eval_model(
         return loss.item()
 
 
-def normal_kalman_filter_guessing(
+def tweaking_vae_w_kfilter(
     vae: nn.Module,
     metadata: TrainingMetaData,
     learning_data: Tuple[np.ndarray, np.ndarray],
@@ -248,6 +249,9 @@ def normal_kalman_filter_guessing(
     batch_size = 64,
     tt_split: float = 0.8,
 ):
+    ### Learning Objects
+    vae.train()
+    optimizer = torch.optim.Adam(vae.parameters(), lr=0.001)
 
     ### Data Management
     states, outputs = learning_data
@@ -280,13 +284,13 @@ def normal_kalman_filter_guessing(
     eval_data = []
     batch_count = int(len(t_data) / batch_size)
     train_layout = TrainLayout(epochs, batch_count, loss_list, eval_data)
-    vae.eval()  ## TOREM: Remove when you have finished trying out the VAE on kalman filter
     with Live(train_layout.layout, console=console, refresh_per_second=10) as live:
         for e in range(epochs):
             epoch_loss = 0
             for b in range(batch_count):
                 ## Batch Wise Data
                 cur_state = t_data[b * batch_size : (b + 1) * batch_size]
+                t_cur_state = torch.from_numpy(cur_state).to(device)
                 cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(
                     device
                 )
@@ -300,6 +304,7 @@ def normal_kalman_filter_guessing(
 
                 # Go Through Batch
                 for i in range(cur_output.shape[0]):
+                    logger.debug(f"Going through the batch {i}")
                     # First without VAE
                     (filtered_mean, filtered_covariance) = kf.filter(
                         cur_output[i, :, :].squeeze().detach().cpu().numpy()
@@ -316,6 +321,13 @@ def normal_kalman_filter_guessing(
                         masked_output[i].squeeze().detach().cpu().numpy()
                     )
                     state_estimates_w_vae.append(smoothed_mean)
+
+                logger.debug(f"Done with the batch. Will add more stuff in a minute")
+                state_estimates_w_vae = torch.tensor(state_estimates_w_vae).to(device)
+                state_estimates_wo_vae = torch.tensor(state_estimates_wo_vae).to(device)
+
+
+                logger.debug(f"Added stuff")
                 ## Try to do reconstruction of state
                 # state_estimates_wo_vae = torch.from_numpy(
                 #     np.array(state_estimates_wo_vae)
@@ -323,30 +335,27 @@ def normal_kalman_filter_guessing(
                 # state_estimates_w_vae = torch.from_numpy(
                 #     np.array(state_estimates_w_vae)
                 # ).to(device)
-                to_compare = [
-                    [state_estimates_wo_vae[e], state_estimates_w_vae[e]] for e in range(4)
-                ]
-                to_compare = np.array(to_compare)
-                logger.debug(f"Shape of to_compare is {to_compare.shape}")
-
-                ## Now we compare the reconstructions
-                # Take the mean across the sequence.
-                # Hopefully we see more differences in our prefered 
-                plot_functions(
-                    to_compare,
-                    f"./figures/pykalman_ml/newrecon_{e}_{b}.png",
-                    ["True", "Estimated"],
-                    first_n_states=3,
-                )
-
                 # diff = torch.abs(state_estimates_wo_vae - state_estimates_w_vae)
                 # Show the differences in a plot
+                # Now we will give our objective. We try to hide how close it is from the true source
+                # Say we want to hide the last stage. 
 
-                ## TOREM: We will exit just trying stuff out for now
-                exit()
+                # CHECK: This will likely need a torch based implementation to 
+                # have the computation graph involved
+                logger.debug(f"Before loss estimation")
+                similarities = F.mse_loss(state_estimates_w_vae[:,:,:-1], t_cur_state[:,:,:-1])
+                diff = - F.mse_loss(state_estimates_wo_vae[:,:,-1], t_cur_state[:,:,-1])
+                final_loss = similarities + diff
+                loss_list.append(final_loss.mean().item())
+                cur_loss = final_loss.mean().item()
+                
+                logger.debug(f"Before optimizing.")
+                optimizer.zero_grad()
+                final_loss.backward()
+                optimizer.step()
 
                 ## TODO: We need some sort of knob here to play with utility vs privacy
-                train_layout.update(e, b, cur_loss, e_report)
+                train_layout.update(e, b, cur_loss, None)
 
             # Normal Reporting
             if (e + 1) % 1 == 0:
@@ -747,7 +756,7 @@ def main():
     # With the Dataset in Place we Also Generate a Variational Autoencoder
     vae = train_VAE(outputs)
 
-    normal_kalman_filter_guessing(
+    tweaking_vae_w_kfilter(
         vae,
         training_data,
         (hidden, outputs),
@@ -765,7 +774,7 @@ def main():
     logger.info(
         f"Training with type of hiddens {type(t_hidden)} and outputs {type(t_outputs)}"
     )
-    results = train(
+    results = final_train(
         args.epochs,
         args.eval_interval,
         vae=vae,
