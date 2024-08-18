@@ -1,55 +1,37 @@
+"""
+A precurosr to main_vae.py where Itried initial ideas.
+Might be discarded later.
+"""
 import argparse
-import json
 import os
-import pdb
 import pickle
 import time
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Generator, Iterable, List, Optional, Tuple
+from typing import Tuple
 
-import control as ct
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-from torch.nn import functional as F
-from rich import inspect, traceback
+from rich import traceback
 from rich.console import Console
 from rich.live import Live
 from sktime.libs.pykalman import KalmanFilter
 from torch import nn, tensor
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch.nn import functional as F
 from tqdm import tqdm
 
-from conrecon.automated_generation import generate_state_space_system
-from conrecon.dplearning.vae import VAE, FlexibleVAE, RecurrentVAE
-from conrecon.models.transformers import TorchsTransformer, TransformerBlock
+from conrecon.dplearning.vae import FlexibleVAE
+from conrecon.models.transformers import TorchsTransformer
 from conrecon.plotting import TrainLayout
 from conrecon.utils import create_logger
-from conrecon.plotting import plot_functions
+from conrecon.ss_generation import SSParam
+from conrecon.data.dataset_generation import TrainingMetaData, generate_dataset
 
 traceback.install()
 
 console = Console()
 
-# Create an alias for a 4-tuple call SParam
-SSParam = Tuple[
-    Optional[np.ndarray],
-    Optional[np.ndarray],
-    Optional[np.ndarray],
-    Optional[np.ndarray],
-]
-
-
-# Create a data class that stores info to be stored as npy
-@dataclass
-class TrainingMetaData:
-    params: SSParam
-    state_size: int
-    output_dim: int
-    time_steps: int
-    ds_size: int
 
 
 logger = create_logger("pykalman_ml")
@@ -218,8 +200,9 @@ def design_matrices() -> SSParam:
 
     C = np.eye(3)[:2, :] + random_state.randn(2, 3) * 0.1
     A = np.array(A)
+    B = np.zeros((A.shape[0], A.shape[0]))  # Place holder for now, not using inputs so far
     C = np.array(C)
-    return A, None, C, None
+    return SSParam(A, B, C, None, None)
 
 
 def eval_model(
@@ -512,134 +495,6 @@ def train(
     return model, loss_list, eval_data
 
 
-def gen_n_sims(
-    params: SSParam,
-    state_size: int,
-    output_dim: int,
-    time_steps: int,
-    dataset_size: int,
-) -> Tuple[np.ndarray, np.ndarray]:
-
-    np.random.seed(0)
-    A, _, C, _ = params
-    assert isinstance(
-        A, np.ndarray
-    ), f"Current simulation requires A to be a matrix. A is type {type(A)}"
-    assert isinstance(
-        C, np.ndarray
-    ), f"Current simulation requires C to be a matrix. C is type {type(C)}"
-
-    # Generate the simulations
-    hidden_truths = np.zeros(
-        (
-            dataset_size,
-            time_steps,
-            state_size,
-        )
-    )
-    system_outputs = np.zeros(
-        (
-            dataset_size,
-            time_steps,
-            output_dim,
-        )
-    )
-
-    # Setup a bar
-    kf = KalmanFilter(transition_matrices=A, observation_matrices=C)
-    for i in tqdm(range(dataset_size)):
-        # CHECK: Might be A[1]
-        # Sample Kalman Filter
-        init_cond = np.random.uniform(-5, 5, A.shape[0])
-        state, obs = kf.sample(time_steps, initial_state=init_cond)
-        # results = get_sim(A, B, C, init_cond, time_steps, input_dim)
-        hidden_truths[i, :, :] = state
-        system_outputs[i, :, :] = obs
-
-    return hidden_truths, system_outputs
-
-
-def generate_dataset(
-    params: SSParam,
-    cache_path: str,
-    state_dim: int,
-    output_dim: int,
-    time_steps: int,
-    ds_size: int,
-) -> Tuple[np.ndarray, np.ndarray, TrainingMetaData]:
-    # This will generate batch_size at a time and save as a dataset
-    columns = [f"h{i}" for i in range(state_dim)]
-    columns += [f"y{i}" for i in range(output_dim)]
-
-    if os.path.exists(cache_path):
-        logger.info(f"Loading dataset from {cache_path}")
-        final_dataset = pd.read_csv(cache_path)
-        # Read the json file to get the metadata
-        with open(cache_path.replace(".csv", ".pkl"), "rb") as f:
-            train_data = pickle.load(f)
-            state_dim = train_data.state_size
-            output_dim = train_data.output_dim
-            ds_size = train_data.ds_size
-            time_steps = train_data.time_steps
-        hiddens = (
-            final_dataset.iloc[:, :state_dim]
-            .values.reshape((ds_size, time_steps, state_dim))
-            .astype(np.float32)
-        )
-        outputs = (
-            final_dataset.iloc[:, state_dim:]
-            .values.reshape((ds_size, time_steps, output_dim))
-            .astype(np.float32)
-        )
-        train_data = TrainingMetaData(
-            params, state_dim, output_dim, time_steps, ds_size
-        )
-        return hiddens, outputs, train_data
-
-    logger.info(f"Generating dataset to {cache_path}")
-    # TODO: Batch this out int batch_size for long enough ds_size
-    hiddens, outputs = gen_n_sims(
-        params,
-        state_dim,
-        output_dim,
-        time_steps,
-        ds_size,
-    )
-    logger.info(f"Hiddens are of shape {hiddens.shape}")
-    logger.info(f"Outputs are of shape {outputs.shape}")
-
-    # CHECK: the dimmensions are correntk
-    # hiddens_transposed = hiddens.transpose(0, 2, 1)
-    # outputs_transposed = outputs.transpose(0, 2, 1)
-
-    hiddens_final = hiddens.reshape((ds_size * time_steps, state_dim))
-    outputs_final = outputs.reshape((ds_size * time_steps, output_dim))
-    # Form hiddens and outputs into a dataframe
-    hiddens = pd.DataFrame(
-        hiddens_final,
-        columns=columns[:state_dim], # type: ignore
-    )  # type: ignore
-    outputs = pd.DataFrame(outputs_final, columns=columns[state_dim:])  # type: ignore
-    final_dataset = pd.concat([hiddens, outputs], axis=1)
-    final_dataset.to_csv(cache_path, index=False)
-
-    train_data = TrainingMetaData(params, state_dim, output_dim, time_steps, ds_size)
-    pkl_file = cache_path.replace(".csv", ".pkl")
-    pickle.dump(train_data, open(pkl_file, "wb"))
-
-    hiddens = (
-        final_dataset.iloc[:, :state_dim]
-        .values.reshape((ds_size, time_steps, state_dim))
-        .astype(np.float32)
-    )
-    outputs = (
-        final_dataset.iloc[:, state_dim:]
-        .values.reshape((ds_size, time_steps, output_dim))
-        .astype(np.float32)
-    )
-
-    return hiddens, outputs, train_data
-
 
 def train_VAE(
     training_data: np.ndarray,
@@ -749,6 +604,7 @@ def main():
         args.ds_cache,
         args.state_size,
         args.output_dim,
+        args.input_dim,
         args.time_steps,
         args.ds_size,
     )

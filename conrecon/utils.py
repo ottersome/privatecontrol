@@ -26,6 +26,13 @@ class ColoredFormatter(logging.Formatter):
         # Replace the entire prefix with the colored version
         return message
         
+# Set all Seeds
+def set_seeds(seed: int):
+    import numpy as np
+    import torch
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
 
 
 def create_logger(name: str) -> logging.Logger:

@@ -1,12 +1,20 @@
 import argparse
-from typing import List
+from typing import List, NamedTuple, Optional
 
 import control as ct
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 from numpy.linalg import matrix_rank
 
 from .utils import deprecated
+
+class SSParam(NamedTuple):
+    A: Optional[npt.NDArray[np.float64]] # Transition Matrix
+    B: Optional[npt.NDArray[np.float64]] # Input Matrix
+    C: Optional[npt.NDArray[np.float64]] # Output Matrix
+    Q: Optional[npt.NDArray[np.float64]] # Process Noise Matrix
+    R: Optional[npt.NDArray[np.float64]] # Measurement Noise Matrix
 
 
 def _local_argsies() -> argparse.Namespace:
@@ -99,6 +107,18 @@ def generate_state_space_system(n, num_inputs, num_outputs, state_size, seed=0):
     C = np.random.rand(num_outputs, state_size)
     D = np.zeros((num_outputs, num_inputs))
     return A, B, C, D
+
+def hand_design_matrices() -> SSParam:
+    random_state = np.random.RandomState(0)
+    state_dim = 3
+    input_dim = 3
+    return SSParam(
+        A = np.array([[1, 0.1, 0], [0, 0.2, 0.3], [0, 0, 0.8]]),
+        B = np.zeros((state_dim, input_dim)),
+        C = np.eye(3)[:2, :] + random_state.randn(2, 3) * 0.1,
+        Q = None, # Let the algorithm figure this out
+        R = None, # Let the algorithm figure this out
+    )
 
 
 if __name__ == "__main__":
