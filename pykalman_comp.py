@@ -132,10 +132,16 @@ if __name__ == "__main__":
     # Now we plot the results
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    funcs_to_plot = np.stack([our_filter_estimation.numpy(), native_estimation]).transpose(1,0,2,3)
+    funcs_to_plot = np.stack(
+        [
+            np.array(states_samples, dtype=np.float64),
+            our_filter_estimation.numpy(),
+            native_estimation,
+        ]
+    ).transpose(1, 0, 2, 3)
     plot_functions(
         funcs_to_plot,
         save_path=f"{args.saveplot_dest}/plot_{timestamp}.png",
-        function_labels=["Torch Version","Native"],
+        function_labels=["True Value","Torch Version","Native"],
         first_n_states=3,
     )

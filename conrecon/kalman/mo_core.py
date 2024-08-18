@@ -1,7 +1,6 @@
 import warnings
 from typing import Optional, Tuple
 
-from numpy.random import f
 import torch
 from torch import Tensor, nn
 
@@ -15,8 +14,8 @@ class Filter(nn.Module):
         transition_matrix: Tensor,
         observation_matrix: Tensor,
         input_matrix: Tensor,
-        initial_state_mean: Tensor,
         batch_size,
+        initial_state_mean: Optional[Tensor] = None,
         process_noise_covariance: Optional[Tensor] = None,
         measurement_noise_covariance: Optional[Tensor] = None,
     ):
@@ -36,6 +35,9 @@ class Filter(nn.Module):
         self.logger = create_logger(__class__.__name__)
 
         # Wwarn if Q and R are not provided
+        if self.initial_state_mean == None:
+            warnings.warn("Initial State Mean is not provided. Will use zero vector. This may hamper performance")
+            self.initial_state_mean = torch.zeros(self.state_size)
         if self.Q_mat == None:
             warnings.warn("Q is not provided. Will use identity matrix. This may lead to unexepected results")
             self.Q_mat = torch.eye(self.state_size)
@@ -46,7 +48,7 @@ class Filter(nn.Module):
     def _initialize_params(
         self, sequence_length: int, inputs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor]:
-
+        assert self.initial_state_mean is not None, "Initial State Mean is not provided"
         if inputs is None:
             inputs = torch.zeros(self.batch_size, sequence_length, self.input_size)
 
@@ -59,7 +61,6 @@ class Filter(nn.Module):
         # ~~We initialize the first one gaussian at random~~
         # states[:, 0, :] = torch.randn(self.batch_size, self.state_size)
         # Actually we want to use the initial state mean
-        inp_tens = self.initial_state_mean.repeat(self.batch_size, 1,1)
         states_est[:, 0, :] =  self.initial_state_mean
         # CHECK: Is identitiy matrix the correct choice here?
         # Prior is set to be of covariance of 1 meaning an assumption of independence
