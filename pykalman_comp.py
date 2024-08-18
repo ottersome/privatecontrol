@@ -15,7 +15,7 @@ from sktime.libs.pykalman import KalmanFilter
 
 from conrecon.kalman.mo_core import Filter
 from conrecon.utils import create_logger
-
+from conrecon.plotting import plot_functions
 
 traceback.install()
 
@@ -111,23 +111,31 @@ if __name__ == "__main__":
         states, obs = kf.sample(args.time_steps, initial_state=init_cond)
         states_samples.append(states)
         obs_samples.append(obs)
-    states_samples_t = torch.Tensor(states_samples)
+    states_samples_t = torch.Tensor(np.array(states_samples))
     obs_samples_t = torch.Tensor(obs_samples)
-    logger.info(
-        f"Samples are of shape  {states_samples_t.shape} and of type {type(states_samples_t)}"
-    )
 
     ### Estimation
     ## Torch Estimation
     our_filter_estimation: torch.Tensor = torch_filter(obs_samples_t) # Star
-    logger.info(
-        f"Our filter is of shape {our_filter_estimation.shape} and type {type(our_filter_estimation)}"
-    )
     ## Native Filter Estimation
     filtered_means = []
-    for i in range(len(states_samples)):
+    for i in range(states_samples_t.shape[0]):
         (filtered_mean, filtered_covariance) = kf.filter(obs_samples[i])
-        filtered_means.append(filtered_means)
+        filtered_means.append(filtered_mean)
 
-    native_estimation = np.array(filtered_means)
+    # Concatenate elements of list to numpy arrayj
+    native_estimation = np.stack(filtered_means)
     my_estimation = our_filter_estimation.numpy()
+
+    # Now we compare the recoveries
+    diff = np.abs(native_estimation - my_estimation)
+    # Now we plot the results
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    funcs_to_plot = np.stack([our_filter_estimation.numpy(), native_estimation]).transpose(1,0,2,3)
+    plot_functions(
+        funcs_to_plot,
+        save_path=f"{args.saveplot_dest}/plot_{timestamp}.png",
+        function_labels=["Torch Version","Native"],
+        first_n_states=3,
+    )

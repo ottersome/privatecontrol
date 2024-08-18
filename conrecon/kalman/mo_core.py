@@ -108,7 +108,7 @@ class Filter(nn.Module):
             # Update
             states_est[:, cs_idx, :] = x_post
 
-        return states_est
+        return states_est[:,1:,:]
 
     def _stage1_state_prediction(
         self, x_km1: Tensor, u_k: Tensor, P_post: Tensor
