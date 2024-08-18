@@ -14,10 +14,10 @@ class Filter(nn.Module):
         transition_matrix: Tensor,
         observation_matrix: Tensor,
         input_matrix: Tensor,
-        process_noise_covariance: Tensor,
-        measurement_noise_covariance: Tensor,
         initial_state_mean: Tensor,
-        batch_size: int,
+        batch_size,
+        process_noise_covariance: Optional[Tensor] = None,
+        measurement_noise_covariance: Optional[Tensor] = None,
     ):
         super().__init__()
         self.A_mat = transition_matrix

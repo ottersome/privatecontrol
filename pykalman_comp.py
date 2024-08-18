@@ -85,15 +85,20 @@ if __name__ == "__main__":
 
     state_size = A.shape[0]
     input_size = B.shape[1]
+    obs_size = C.shape[0]
+    state_covariance = np.eye(state_size)
+    observation_covariance = np.eye(obs_size)
     init_cond = [5, -5, 0]
 
     # Generate Torch Model for Later State Estimation
     torch_filter = Filter(
-        transition_matrix=torch.from_numpy(A),
-        input_matrix=torch.from_numpy(B),
-        observation_matrix=torch.from_numpy(C),
-        initial_state_mean=torch.Tensor(init_cond),
+        transition_matrix=torch.from_numpy(A).to(torch.float32),
+        observation_matrix=torch.from_numpy(C).to(torch.float32),
+        input_matrix=torch.from_numpy(B).to(torch.float32),
+        initial_state_mean=torch.Tensor(init_cond).to(torch.float32),
         batch_size=num_samples,
+        process_noise_covariance=torch.from_numpy(state_covariance).to(torch.float32),
+        measurement_noise_covariance=torch.from_numpy(observation_covariance).to(torch.float32)
     )
     kf = KalmanFilter(
         transition_matrices=A, observation_matrices=C, initial_state_mean=init_cond
