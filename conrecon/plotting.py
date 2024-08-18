@@ -5,6 +5,7 @@ import math
 
 from matplotlib import pyplot as plt
 import numpy as np
+import numpy.typing as npt
 from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
@@ -135,7 +136,7 @@ class TrainLayout:
         self.layout["table"].update(new_table)
 
 def plot_functions(
-    functions: np.ndarray,
+    functions: npt.NDArray[np.float64],
     save_path: str,
     function_labels: List[str],
     first_n_states: int = 3,
