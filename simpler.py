@@ -16,7 +16,7 @@ from conrecon.automated_generation import generate_state_space_system
 from conrecon.models import SimpleModel
 from conrecon.plotting import TrainLayout
 from conrecon.utils import create_logger
-from pykalman import KalmanFilter
+from sktime.libs.pykalman import KalmanFilter
 from rich import inspect
 from rich.console import Console
 from rich.live import Live
