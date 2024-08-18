@@ -60,8 +60,6 @@ class Filter(nn.Module):
         # states[:, 0, :] = torch.randn(self.batch_size, self.state_size)
         # Actually we want to use the initial state mean
         inp_tens = self.initial_state_mean.repeat(self.batch_size, 1,1)
-        self.logger.info(f"Shape of the initial state mean {inp_tens.shape}")
-        self.logger.info(f"Shape of the states {states_est.shape}")
         states_est[:, 0, :] =  self.initial_state_mean
         # CHECK: Is identitiy matrix the correct choice here?
         # Prior is set to be of covariance of 1 meaning an assumption of independence
@@ -91,13 +89,11 @@ class Filter(nn.Module):
         _ = obs.shape[0] # Batch Size
         sequence_length = obs.shape[1]
 
-        self.logger.info(f"Shape of obs is {obs.shape} with tyep {type(obs)}")
 
         # We Start the initial states
         (states_est, P_post, inputs) = self._initialize_params(sequence_length, inputs)
 
         # Loop through current state id
-        self.logger.info(f"Shape of obser.at(0) is {obs.shape} type {type(obs)}")
         for cs_idx in range(1, sequence_length + 1):
             x_km1 = states_est[:, cs_idx - 1, :]  # Previous Stat
             u_k = inputs[:, cs_idx-1, :]  # Inputs
@@ -110,8 +106,6 @@ class Filter(nn.Module):
             P_post[:,cs_idx,:,:] = P_post_iter_est
 
             # Update
-            self.logger.info(f"Shape of x_post is {x_post.shape} and type {type(x_post)}")
-            self.logger.info(f"Shape of states is {states_est.shape} and type {type(states_est)}")
             states_est[:, cs_idx, :] = x_post
 
         return states_est
@@ -153,10 +147,6 @@ class Filter(nn.Module):
             @ self.C_mat.T
             @ torch.inverse(self.C_mat @ P_prior @ self.C_mat.T + self.R_mat)
         )
-        self.logger.info(f"Shape of z_k is {z_k.shape} and type {type(z_k)}")
-        self.logger.info(f"Shape of x_prior is {xpri_k.shape} and type {type(xpri_k)}")
-        self.logger.info(f"Shape of C is {self.C_mat.shape} and type {type(self.C_mat)}")
-        self.logger.info(f"Shape of K is {K.shape} and type {type(K)}")
         z_k_unsq = z_k.unsqueeze(2)
         xpri_k_unsq = xpri_k.unsqueeze(2)
         C_expanded = self.C_mat.unsqueeze(0)
@@ -165,8 +155,6 @@ class Filter(nn.Module):
         # Numerically unchecked
         x_post = (xpri_k_unsq + K @ (z_k_unsq - C_expanded @ xpri_k_unsq)).squeeze(2)
         P_post = (torch.eye(self.state_size) - K @ C_expanded) @ P_prior
-        self.logger.info(f"Shape of x_post is {x_post.shape} and type {type(x_post)}")
-        self.logger.info(f"Shape of P_post is {P_post.shape} and type {type(P_post)}")
         return x_post, P_post
 
 
