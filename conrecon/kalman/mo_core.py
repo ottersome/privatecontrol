@@ -1,6 +1,7 @@
 import warnings
 from typing import Optional, Tuple
 
+from numpy.random import f
 import torch
 from torch import Tensor, nn
 
@@ -50,9 +51,9 @@ class Filter(nn.Module):
             inputs = torch.zeros(self.batch_size, sequence_length, self.input_size)
 
         # CHECK: If random initiation is correct
-        states = torch.zeros(self.batch_size, sequence_length, self.state_size)
+        states_est = torch.zeros(self.batch_size, sequence_length+1, self.state_size)
         Ps = torch.zeros(
-            self.batch_size, sequence_length, self.state_size, self.state_size
+            self.batch_size, sequence_length+1, self.state_size, self.state_size
         )
 
         # ~~We initialize the first one gaussian at random~~
@@ -60,13 +61,13 @@ class Filter(nn.Module):
         # Actually we want to use the initial state mean
         inp_tens = self.initial_state_mean.repeat(self.batch_size, 1,1)
         self.logger.info(f"Shape of the initial state mean {inp_tens.shape}")
-        self.logger.info(f"Shape of the states {states.shape}")
-        states[:, 0, :] =  self.initial_state_mean
+        self.logger.info(f"Shape of the states {states_est.shape}")
+        states_est[:, 0, :] =  self.initial_state_mean
         # CHECK: Is identitiy matrix the correct choice here?
         # Prior is set to be of covariance of 1 meaning an assumption of independence
         Ps[:, 0, :, :] = torch.eye(self.state_size)
 
-        return states, Ps, inputs
+        return states_est, Ps, inputs
          
 
     def forward(self, obs: Tensor, inputs: Optional[Tensor] = None) -> Tensor:
@@ -93,23 +94,27 @@ class Filter(nn.Module):
         self.logger.info(f"Shape of obs is {obs.shape} with tyep {type(obs)}")
 
         # We Start the initial states
-        (states, P_post, inputs) = self._initialize_params(sequence_length, inputs)
+        (states_est, P_post, inputs) = self._initialize_params(sequence_length, inputs)
 
         # Loop through current state id
+        self.logger.info(f"Shape of obser.at(0) is {obs.shape} type {type(obs)}")
         for cs_idx in range(1, sequence_length + 1):
-            x_km1 = states[:, cs_idx - 1, :]  # Previous State
-            u_k = inputs[:, cs_idx, :]  # Inputs
-            z_k = obs[:, cs_idx, :]  # Observation
+            x_km1 = states_est[:, cs_idx - 1, :]  # Previous Stat
+            u_k = inputs[:, cs_idx-1, :]  # Inputs
+            z_k = obs[:, cs_idx-1, :]  # Observation
 
             # First Stage
-            x_prior, P_prior = self._stage1_state_prediction(x_km1, u_k, P_post)
+            x_prior, P_prior = self._stage1_state_prediction(x_km1, u_k, P_post[:,cs_idx-1,:,:])
             # Second Stage
-            x_post, P_post = self._stage2_measurement_update(P_prior, z_k, x_prior)
+            x_post, P_post_iter_est = self._stage2_measurement_update(P_prior, z_k, x_prior)
+            P_post[:,cs_idx,:,:] = P_post_iter_est
 
             # Update
-            states[:, cs_idx, :] = x_post
+            self.logger.info(f"Shape of x_post is {x_post.shape} and type {type(x_post)}")
+            self.logger.info(f"Shape of states is {states_est.shape} and type {type(states_est)}")
+            states_est[:, cs_idx, :] = x_post
 
-        return states
+        return states_est
 
     def _stage1_state_prediction(
         self, x_km1: Tensor, u_k: Tensor, P_post: Tensor
@@ -117,15 +122,20 @@ class Filter(nn.Module):
         """
         Will calculate projection for next state as well as the covariance
         """
-        # CHECK: Ensure this is being done in a batch matmul manner
-        inspect(x_km1.shape, title="Shape of x_km1")
-        inspect(u_k.shape, title="Shape of u_k")
-        inspect(self.A_Mat.shape, title="Shape of A_post")
-        inspect(self.B_mat.shape, title="Shape of B_at")
-        inspect(P_post.shape, title="Shape of P_post")
-        inspect(self.Q_mat.shape, title="Shape of Q_post")
+        assert isinstance(self.Q_mat, torch.Tensor), "Q should be a torch tensor"
+        A_expanded = self.A_mat.unsqueeze(0)  # Shape becomes (1, 3, 3)
+        B_expanded = self.B_mat.unsqueeze(0)  # Shape becomes (1, 3, 1)
+        x_km1_unsq = x_km1.unsqueeze(2)
+        uk_unsq = u_k.unsqueeze(2)
+        # Now we can use torch.matmul to perform the batch multiplication
+        # result = torch.matmul(batched_input, A_expanded)
 
-        x_prior = self.A_Mat @ x_km1 + self.B_mat @ u_k
+        # x_prior = self.A_Mat @ x_km1 + self.B_mat @ u_k
+        x_prior = (
+            torch.matmul(A_expanded, x_km1_unsq)
+            + torch.matmul(B_expanded, uk_unsq)
+        ).squeeze(2)
+        # Confirmed
         P_prior = self.A_mat @ P_post @ self.A_mat.T + self.Q_mat
 
         return x_prior, P_prior
@@ -137,14 +147,26 @@ class Filter(nn.Module):
         Will use observations to update information
         """
         # Calculate Kalman Gain
+        # Unchecked:
         K = (
             P_prior
-            @ self.H_mat.T
-            @ torch.inverse(self.H_mat @ P_prior @ self.H_mat.T + self.R_mat)
+            @ self.C_mat.T
+            @ torch.inverse(self.C_mat @ P_prior @ self.C_mat.T + self.R_mat)
         )
+        self.logger.info(f"Shape of z_k is {z_k.shape} and type {type(z_k)}")
+        self.logger.info(f"Shape of x_prior is {xpri_k.shape} and type {type(xpri_k)}")
+        self.logger.info(f"Shape of C is {self.C_mat.shape} and type {type(self.C_mat)}")
+        self.logger.info(f"Shape of K is {K.shape} and type {type(K)}")
+        z_k_unsq = z_k.unsqueeze(2)
+        xpri_k_unsq = xpri_k.unsqueeze(2)
+        C_expanded = self.C_mat.unsqueeze(0)
+    
         # Update the estimate with the measurement
-        x_post = xpri_k + K @ (z_k - self.H_mat @ xpri_k)
-        P_post = (torch.eye(self.state_size) - K @ self.H_mat) @ P_prior
+        # Numerically unchecked
+        x_post = (xpri_k_unsq + K @ (z_k_unsq - C_expanded @ xpri_k_unsq)).squeeze(2)
+        P_post = (torch.eye(self.state_size) - K @ C_expanded) @ P_prior
+        self.logger.info(f"Shape of x_post is {x_post.shape} and type {type(x_post)}")
+        self.logger.info(f"Shape of P_post is {P_post.shape} and type {type(P_post)}")
         return x_post, P_post
 
 

@@ -106,24 +106,27 @@ if __name__ == "__main__":
 
     ### Gather Info
     states_samples = []
+    obs_samples = []
     for b in range(num_samples):
         states, obs = kf.sample(args.time_steps, initial_state=init_cond)
         states_samples.append(states)
+        obs_samples.append(obs)
     states_samples_t = torch.Tensor(states_samples)
+    obs_samples_t = torch.Tensor(obs_samples)
     logger.info(
         f"Samples are of shape  {states_samples_t.shape} and of type {type(states_samples_t)}"
     )
 
     ### Estimation
     ## Torch Estimation
-    our_filter_estimation: torch.Tensor = torch_filter(states_samples_t) # Star
+    our_filter_estimation: torch.Tensor = torch_filter(obs_samples_t) # Star
     logger.info(
         f"Our filter is of shape {our_filter_estimation.shape} and type {type(our_filter_estimation)}"
     )
     ## Native Filter Estimation
     filtered_means = []
     for i in range(len(states_samples)):
-        (filtered_mean, filtered_covariance) = kf.filter(states_samples[i])
+        (filtered_mean, filtered_covariance) = kf.filter(obs_samples[i])
         filtered_means.append(filtered_means)
 
     native_estimation = np.array(filtered_means)
