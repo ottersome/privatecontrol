@@ -139,7 +139,7 @@ def plot_functions(
     functions: npt.NDArray[np.float64],
     save_path: str,
     function_labels: List[str],
-    first_n_states: int = 3,
+    first_n_states: int = 4,
     ):
     """
     Plots a set of functions in a grid of subplots
@@ -163,9 +163,10 @@ def plot_functions(
     dim_to_show = min(dim, first_n_states)
 
     # Do a grid configuration for independent functions
-    sqrt = math.ceil(np.sqrt(num_independent_functions))
+    sqrt = math.ceil(np.sqrt(num_independent_functions)) # type: ignore
+    num_rows = math.ceil(num_independent_functions/sqrt)
     _, ax = plt.subplots(
-        sqrt, sqrt, figsize=(sqrt * 6, sqrt * 6)
+        num_rows, sqrt, figsize=( sqrt * 6,num_rows * 6)
     )
     ax = np.atleast_2d(ax)  # type: ignore
     plt.tight_layout()
@@ -176,6 +177,7 @@ def plot_functions(
         i,j = n // sqrt, n % sqrt
         for s in range(dim_to_show):
             for f in range(num_functions):
+                print(f"Plotting {f}-$S_{s}$")
                 ax[i, j].plot(
                     functions[n, f, :, s],
                     label=function_labels[f] + f"-$S_{s}$",
