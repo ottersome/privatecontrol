@@ -1,11 +1,12 @@
 # All the imports
-import shutil
-from typing import List, Union
 import math
+import shutil
+from typing import List, Union, Optional
 
-from matplotlib import pyplot as plt
 import numpy as np
 import numpy.typing as npt
+import seaborn as sns
+from matplotlib import pyplot as plt
 from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
@@ -135,11 +136,13 @@ class TrainLayout:
         self.tplot.add_measurement(tloss)
         self.layout["table"].update(new_table)
 
-def plot_functions(
+def plot_functions_2by1(
     functions: npt.NDArray[np.float64],
     save_path: str,
     function_labels: List[str],
-    first_n_states: int = 4,
+    indep_func_label = "Sample",
+    dim_to_show: Optional[List] = None,
+    dim_labels: Optional[List] = None,
     ):
     """
     Plots a set of functions in a grid of subplots
@@ -155,39 +158,115 @@ def plot_functions(
     while len(functions.shape) < 4:
         functions = np.expand_dims(functions, axis=0)
     assert len(function_labels) == functions.shape[1], "`plot_functions` Needs as many labels as functions"
+    if dim_to_show is None:
+        dim_to_show = list(range(functions.shape[3]))
+
+
+    num_independent_functions = functions.shape[0]
+    assert num_independent_functions == 2, "`plot_functions` Can only deal with 2 independent functions"
+    num_functions = functions.shape[1]
+    _ = functions.shape[2] # Seq_length
+    num_dim = functions.shape[3]
+    numdim_toshow = len(dim_to_show)
+
+    sns.set_theme(style="whitegrid")
+
+    # Do a grid configuration for independent functions
+    num_rows = 2
+    num_cols = 1
+    _, ax = plt.subplots(
+        num_rows, num_cols, figsize=( num_cols * 14,num_rows *  4)
+    )
+    # ax = np.atleast_2d(ax)  # type: ignore
+
+    plt.tight_layout()
+
+    colormap = sns.color_palette("husl", num_dim)
+    lines_styles = ["-",  "--", "-.", ":"]
+    for n in range(num_independent_functions):
+        i,j = n // num_cols, n % num_cols
+        for s in dim_to_show:
+            for f in range(num_functions):
+                ax[n].plot(
+                    functions[n, f, :, s],
+                    label=function_labels[f] + f"-$S_{s}$",
+                    linestyle=lines_styles[f % len(lines_styles)],
+                    color=colormap[s],
+                )
+                ax[n].set_xlabel("Time")
+                ax[n].set_ylabel(indep_func_label)
+                ax[n].set_title(indep_func_label+f" {n+1}")
+                ax[n].legend()
+    # Save the figure
+    plt.savefig(save_path, bbox_inches='tight', pad_inches=0.5)
+    plt.close()
+
+def plot_functions(
+    functions: npt.NDArray[np.float64],
+    save_path: str,
+    function_labels: List[str],
+    first_n_states: int = 4,
+    dims_to_show: Optional[List] = None,
+    indep_func_label = "Sample",
+    dim_labels: Optional[List] = None,
+    ):
+    """
+    Plots a set of functions in a grid of subplots
+    Args:
+        - functions: A numpy array of shape (num_independent_functions, num_functions, seq_length, dim)
+        - save_path: The path to save the figure to
+        - function_labels: A list of strings of length num_functions
+        - first_n_states: The number of states to show in the plot
+    Returns:
+        None
+    """
 
     num_independent_functions = functions.shape[0]
     num_functions = functions.shape[1]
     _ = functions.shape[2] # Seq_length
-    dim = functions.shape[3]
-    dim_to_show = min(dim, first_n_states)
+    num_dims = functions.shape[3]
+
+    assert len(functions.shape) <= 4, "`plot_functions` Can only deal with up to 4D tensors"
+    while len(functions.shape) < 4:
+        functions = np.expand_dims(functions, axis=0)
+    assert len(function_labels) == functions.shape[1], "`plot_functions` Needs as many labels as functions"
+    if dims_to_show is None:
+        dims_to_show = list(range(num_dims))
+    if dim_labels is None:
+        dim_labels = list(range(num_dims))
+    assert len(dims_to_show) == len(dim_labels), "`dims_to_show` and `dim_labels` must be of the same length"
+
+    sns.set_theme(style="whitegrid")
 
     # Do a grid configuration for independent functions
     sqrt = math.ceil(np.sqrt(num_independent_functions)) # type: ignore
     num_rows = math.ceil(num_independent_functions/sqrt)
-    _, ax = plt.subplots(
-        num_rows, sqrt, figsize=( sqrt * 6,num_rows * 6)
+    fig, ax = plt.subplots(
+        num_rows, sqrt, figsize=( sqrt * 8,num_rows * 8)
     )
     ax = np.atleast_2d(ax)  # type: ignore
     plt.tight_layout()
 
-    colormap = plt.get_cmap("tab10")
-    lines_styles = ["-", "--", "-.", ":"]
+    colormap = sns.color_palette("husl", num_dims)
+    lines_styles = ["-",  "-", "-", ":"]
+    markers = ["o", "*", "x", "<", ">", "1", "2", "3", "4", "8", "s", "p", "P", "*", "h", "H", "+", "x", "X", "D", "d"]
     for n in range(num_independent_functions):
         i,j = n // sqrt, n % sqrt
-        for s in range(dim_to_show):
+        for s in dims_to_show:
             for f in range(num_functions):
-                print(f"Plotting {f}-$S_{s}$")
+                label = function_labels[f] + " " + dim_labels[s] if n == 0 else None
                 ax[i, j].plot(
                     functions[n, f, :, s],
-                    label=function_labels[f] + f"-$S_{s}$",
-                    linestyle=lines_styles[f],
-                    color=colormap(s),
+                    label=label,
+                    linestyle=lines_styles[f % len(lines_styles)],
+                    marker=markers[f % len(markers)],
+                    color=colormap[s],
                 )
                 ax[i, j].set_xlabel("Time")
-                ax[i, j].set_ylabel("Output")
-                ax[i, j].set_title(f"Output {n+1}")
-                ax[i, j].legend()
+                ax[i, j].set_ylabel(indep_func_label)
+                ax[i, j].set_title(indep_func_label+f" {n+1}")
+                # ax[i, j].legend()
     # Save the figure
-    plt.savefig(save_path)
+    fig.legend(loc='center left', bbox_to_anchor=(1,0.5), title='Legend')
+    plt.savefig(save_path, bbox_inches='tight')
     plt.close()

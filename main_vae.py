@@ -1,7 +1,7 @@
 import argparse
 import os
 import time
-from typing import Tuple
+from typing import Tuple, List
 
 import numpy as np
 import torch
@@ -14,7 +14,7 @@ from torch.nn import functional as F
 from conrecon.data.dataset_generation import TrainingMetaData, generate_dataset
 from conrecon.dplearning.vae import FlexibleVAE
 from conrecon.kalman.mo_core import Filter
-from conrecon.plotting import TrainLayout, plot_functions
+from conrecon.plotting import TrainLayout, plot_functions, plot_functions_2by1
 from conrecon.ss_generation import hand_design_matrices
 from conrecon.utils import create_logger
 from rich.live import Live
@@ -84,6 +84,7 @@ def trainVAE_wprivacy(
     learning_data: Tuple[np.ndarray, np.ndarray],
     epochs: int,
     plot_dest: str,
+    isdim_priv : List[bool],
     batch_size = 64,
     tt_split: float = 0.8,
     vae_latent_size: int = 10,
@@ -103,6 +104,9 @@ def trainVAE_wprivacy(
     ### Filter Data
     A, C, = training_metadata.params.A, training_metadata.params.C
     B = training_metadata.params.B
+    assert isinstance(A, np.ndarray), "A should be a numpy array"
+    assert isinstance(B, np.ndarray), "B should be a numpy array"
+    assert isinstance(C, np.ndarray), "C should be a numpy array"
     # t_data, val_data = learning_data
 
     # My Filter
@@ -135,6 +139,21 @@ def trainVAE_wprivacy(
         state_est,_ = kf.filter(val_outputs[i, :, :].squeeze().detach().cpu().numpy())
         val_samples.append(state_est)
     val_samples = np.stack(val_samples)
+
+    # Make explicit index list for private dims
+    num_stateDims = A.shape[1]
+    private_dims = []
+    public_dims = []
+    dim_labels = []
+    for i in range(num_stateDims):
+        if isdim_priv[i]:
+            private_dims.append(i)
+            dim_labels.append(f"Private Dim {i}")
+        else:
+            public_dims.append(i)
+            dim_labels.append(f"Public Dim {i}")
+
+
 
     ### Train the VAE
     criterion = nn.MSELoss()  # TODO: Change this to something else
@@ -180,8 +199,10 @@ def trainVAE_wprivacy(
                 # CHECK: This will likely need a torch based implementation to 
                 # have the computation graph involved
                 logger.debug("Before loss estimation")
-                similarities = F.mse_loss(state_estimates_w_vae[:,:,1:], t_cur_state[:,:,1:])
-                diff = - F.mse_loss(state_estimates_wo_vae[:,:,0], t_cur_state[:,:,0])
+                similarities = F.mse_loss(state_estimates_w_vae[:,:,public_dims], t_cur_state[:,:,public_dims])
+                diff = - F.mse_loss(state_estimates_wo_vae[:,:,private_dims], t_cur_state[:,:,private_dims])
+                # similarities = F.mse_loss(state_estimates_w_vae[:,:,1:], t_cur_state[:,:,1:])
+                # diff = - F.mse_loss(state_estimates_wo_vae[:,:,0], t_cur_state[:,:,0])
                 final_loss = similarities + diff
                 fl_mean = final_loss.mean()
                 loss_list.append(fl_mean.item())
@@ -207,7 +228,9 @@ def trainVAE_wprivacy(
                 plot_functions(
                     func_to_compare,
                     f"./figures/vae_fixed_recon/plot_vaerecon_eval_{e}_{b}_recon_states.png",
-                    function_labels=["True Value","Torch Version","Native"],
+                    function_labels=["True Value","Our Method + KF","Kalman Filter"],
+                    dim_labels=dim_labels[:2],
+                    dims_to_show=[0,1]
                 )
 
                 ## Now compare the outputs by saving their plot
@@ -217,10 +240,11 @@ def trainVAE_wprivacy(
                         masked_output[:2].squeeze().cpu().detach().numpy(),
                     ]
                 ).transpose(1, 0, 2, 3)
-                plot_functions(
+                plot_functions_2by1(
                     func_to_compare,
-                    f"./figures/vae_fixed_recon/plot_vaerecon_eval_{e}_{b}_recon_outputs.png",
-                    function_labels=["True Value","Torch Version"],
+                    f"./figures/vae_fixed_recon/plot_vaerecon_eval_{e:02d}_{b:02d}_recon_outputs.png",
+                    function_labels=["True Value","Our Method"],
+                    dim_to_show=[1,],
                 )
 
 
@@ -261,6 +285,7 @@ def main():
         (hidden, outputs),
         args.epochs,
         args.saveplot_dest,
+        [True,False,True]
     )
 
 if __name__ == "__main__":
