@@ -44,7 +44,6 @@ def generate_dataset(
             train_data = pickle.load(f)
             state_dim = train_data.state_size
             output_dim = train_data.output_dim
-            input_dim = train_data.input_dim
             ds_size = train_data.ds_size
             time_steps = train_data.time_steps
         hiddens = (

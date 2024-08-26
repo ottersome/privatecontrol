@@ -1,35 +1,22 @@
 import argparse
-import json
 import os
-import pdb
-import pickle
 import time
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Dict, Generator, Iterable, List, Optional, Tuple
+from typing import Tuple
 
-import control as ct
-import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import torch
-from torch.nn import functional as F
-from rich import inspect, traceback
+from rich import traceback
 from rich.console import Console
-from rich.live import Live
 from sktime.libs.pykalman import KalmanFilter
 from torch import nn, tensor
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
-from tqdm import tqdm
+from torch.nn import functional as F
 
-from conrecon.ss_generation import SSParam, hand_design_matrices
-from conrecon.dplearning.vae import VAE, FlexibleVAE, RecurrentVAE
-from conrecon.models.transformers import TorchsTransformer, TransformerBlock
-from conrecon.plotting import TrainLayout
-from conrecon.utils import create_logger, set_seeds
-from conrecon.plotting import plot_functions
 from conrecon.data.dataset_generation import TrainingMetaData, generate_dataset
+from conrecon.dplearning.vae import FlexibleVAE
 from conrecon.kalman.mo_core import Filter
+from conrecon.plotting import TrainLayout, plot_functions
+from conrecon.ss_generation import hand_design_matrices
+from conrecon.utils import create_logger
 
 traceback.install()
 
