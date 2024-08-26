@@ -17,6 +17,7 @@ from conrecon.kalman.mo_core import Filter
 from conrecon.plotting import TrainLayout, plot_functions
 from conrecon.ss_generation import hand_design_matrices
 from conrecon.utils import create_logger
+from rich.live import Live
 
 traceback.install()
 
@@ -89,13 +90,31 @@ def trainVAE_wprivacy(
     vae_hidden_size: int = 128,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    num_valsamps = 2
     ### Learning Objects
     vae = FlexibleVAE(
-        input_size=training_metadata.input_dim,
+        # inout_size for model is output_dim for data
+        input_size=training_metadata.output_dim,
         latent_size=vae_latent_size,
         hidden_size=vae_hidden_size,
     ).to(device)
     optimizer = torch.optim.Adam(vae.parameters(), lr=0.001) # type: ignore
+
+    ### Filter Data
+    A, C, = training_metadata.params.A, training_metadata.params.C
+    B = training_metadata.params.B
+    # t_data, val_data = learning_data
+
+    # My Filter
+    torch_filter = Filter(
+        transition_matrix=torch.from_numpy(A).to(torch.float32).to(device),
+        observation_matrix=torch.from_numpy(C).to(torch.float32).to(device),
+        input_matrix=torch.from_numpy(B).to(torch.float32).to(device),
+        batch_size=batch_size,
+    ).to(device)
+    # Native Filter
+    kf = KalmanFilter(transition_matrices=A, observation_matrices=C)
+
 
     ### Data Management
     states, outputs = learning_data # x, y
@@ -109,40 +128,26 @@ def trainVAE_wprivacy(
         toutputs,
         [int(len(outputs) * tt_split), len(outputs) - int(len(outputs) * tt_split)],
     )
-    t_val_states, t_val_outputs = tensor(val_states), tensor(val_outputs)
-
-    ### Filter Data
-    A, C, = training_metadata.params.A, training_metadata.params.C
-    B = training_metadata.params.B
-    kf = KalmanFilter(transition_matrices=A, observation_matrices=C)
-    t_data, val_data = learning_data
-
-    # My Filter
-    torch_filter = Filter(
-        transition_matrix=torch.from_numpy(A).to(torch.float32),
-        observation_matrix=torch.from_numpy(C).to(torch.float32),
-        input_matrix=torch.from_numpy(B).to(torch.float32),
-        batch_size=batch_size,
-    )
-    # Native Filter
-    kf = KalmanFilter(
-        transition_matrices=training_metadata.params[0],
-        observation_matrices=training_metadata.params[2],
-    )
+    t_val_states, t_val_outputs = tensor(val_states).to(device), tensor(val_outputs).to(device)
+    ## Prepare Data For Validation
+    val_samples = []
+    for i in range(num_valsamps):
+        state_est,_ = kf.filter(val_outputs[i, :, :].squeeze().detach().cpu().numpy())
+        val_samples.append(state_est)
+    val_samples = np.stack(val_samples)
 
     ### Train the VAE
     criterion = nn.MSELoss()  # TODO: Change this to something else
     loss_list = []
     eval_data = []
-    batch_count = int(len(t_data) / batch_size)
+    batch_count = int(tstates.shape[0] / batch_size)
     train_layout = TrainLayout(epochs, batch_count, loss_list, eval_data)
     with Live(train_layout.layout, console=console, refresh_per_second=10) as live:
         for e in range(epochs):
             epoch_loss = 0
             for b in range(batch_count):
                 ## BatchdWise Data
-                cur_state = t_data[b * batch_size : (b + 1) * batch_size]
-                t_cur_state = torch.from_numpy(cur_state).to(device)
+                t_cur_state = trn_states[b * batch_size : (b + 1) * batch_size].to(device)
                 cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(
                     device
                 )
@@ -166,39 +171,58 @@ def trainVAE_wprivacy(
                     )
                     state_estimates_wo_vae.append(smoothed_mean)
 
-                # Then for VAE
                 state_estimates_wo_vae = torch.tensor(state_estimates_wo_vae).to(device)
-                state_estimates_w_vae = torch_filter(cur_output)
-                logger.debug(f"Done with the batch. Will add more stuff in a minute")
-
-                ## Try to do reconstruction of state
-                # state_estimates_wo_vae = torch.from_numpy(
-                #     np.array(state_estimates_wo_vae)
-                # ).to(device)
-                # state_estimates_w_vae = torch.from_numpy(
-                #     np.array(state_estimates_w_vae)
-                # ).to(device)
-                # diff = torch.abs(state_estimates_wo_vae - state_estimates_w_vae)
-                # Show the differences in a plot
-                # Now we will give our objective. We try to hide how close it is from the true source
-                # Say we want to hide the last stage. 
+                logger.debug(f"Check if tensor requires grad {cur_output.requires_grad}")
+                cur_output.requires_grad = True
+                state_estimates_w_vae = torch_filter(masked_output)
+                logger.debug("Done with the batch. Will add more stuff in a minute")
 
                 # CHECK: This will likely need a torch based implementation to 
                 # have the computation graph involved
-                logger.debug(f"Before loss estimation")
-                similarities = F.mse_loss(state_estimates_w_vae[:,:,:-1], t_cur_state[:,:,:-1])
-                diff = - F.mse_loss(state_estimates_wo_vae[:,:,-1], t_cur_state[:,:,-1])
+                logger.debug("Before loss estimation")
+                similarities = F.mse_loss(state_estimates_w_vae[:,:,1:], t_cur_state[:,:,1:])
+                diff = - F.mse_loss(state_estimates_wo_vae[:,:,0], t_cur_state[:,:,0])
                 final_loss = similarities + diff
                 fl_mean = final_loss.mean()
                 loss_list.append(fl_mean.item())
                 cur_loss = final_loss.mean().item()
                 
-                logger.debug(f"Before optimizing.")
+                logger.debug("Before optimizing.")
                 optimizer.zero_grad()
                 fl_mean.backward()
                 optimizer.step()
 
-                logger.debug(f"Loss at epoch {e} batch {b} is {fl_mean.item()}")
+
+                # Plot and Save the Reconstruction of Validation Samples
+                inputo = vae(t_val_outputs[:batch_size, :, :])
+                val_state_vae_est = torch_filter(inputo).squeeze().cpu().detach().numpy()
+                func_to_compare = np.stack(
+                    [
+                        t_val_states[:num_valsamps, :, :].squeeze().cpu().detach().numpy(),
+                        val_state_vae_est[:num_valsamps, :, :],
+                        val_samples[:num_valsamps, :, :],
+                    ]
+                ).transpose(1, 0, 2, 3)
+                print(f"Shape of func_to_compare is {func_to_compare.shape}")
+                plot_functions(
+                    func_to_compare,
+                    f"./figures/vae_fixed_recon/plot_vaerecon_eval_{e}_{b}_recon_states.png",
+                    function_labels=["True Value","Torch Version","Native"],
+                )
+
+                ## Now compare the outputs by saving their plot
+                func_to_compare = np.stack(
+                    [
+                        cur_output[:2].squeeze().cpu().detach().numpy(),
+                        masked_output[:2].squeeze().cpu().detach().numpy(),
+                    ]
+                ).transpose(1, 0, 2, 3)
+                plot_functions(
+                    func_to_compare,
+                    f"./figures/vae_fixed_recon/plot_vaerecon_eval_{e}_{b}_recon_outputs.png",
+                    function_labels=["True Value","Torch Version"],
+                )
+
 
                 ## TODO: We need some sort of knob here to play with utility vs privacy
                 train_layout.update(e, b, cur_loss, None)
@@ -215,7 +239,7 @@ def main():
     params = hand_design_matrices()
     np.random.seed(int(time.time()))
 
-    logger.info(f"Generating dataset")
+    logger.info("Generating dataset")
 
     # TODO: Make it  so that generate_dataset checks if params are the same
     hidden, outputs, training_data = generate_dataset(
