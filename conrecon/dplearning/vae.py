@@ -69,7 +69,7 @@ class FlexibleVAE(nn.Module):
         self.logger.debug(f"The sigma and mu shapes are ({sigma.shape},{mu.shape})")
         sample = self.N.sample(mu.shape)
         self.logger.debug(f"Shape of sample is {sample.shape}")
-        d0 = sigma * self.N.sample(mu.shape)
+        d0 = sigma * self.N.sample(mu.shape).to(sigma.device)
         z = mu + d0
         # CHECK: this to be correct.
         # self.kl = (sigma**2 + mu**2 - torch.log(sigma) - 1/2).sum()

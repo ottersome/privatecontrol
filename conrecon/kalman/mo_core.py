@@ -31,32 +31,42 @@ class Filter(nn.Module):
         self.batch_size = batch_size
         self.state_size = transition_matrix.shape[0]
         self.obs_size = observation_matrix.shape[1]
-
         self.logger = create_logger(__class__.__name__)
 
         # Wwarn if Q and R are not provided
         if self.initial_state_mean == None:
             warnings.warn("Initial State Mean is not provided. Will use zero vector. This may hamper performance")
-            self.initial_state_mean = torch.zeros(self.state_size)
+            self.initial_state_mean = torch.zeros(self.state_size).to(self.A_mat.device)
         if self.Q_mat == None:
             warnings.warn("Q is not provided. Will use identity matrix. This may lead to unexepected results")
-            self.Q_mat = torch.eye(self.state_size)
+            self.Q_mat = torch.eye(self.state_size).to(self.A_mat.device)
         if self.R_mat == None:
             warnings.warn("R is not provided. Will use identity matrix. This may lead to unexepected results")
-            self.R_mat = torch.eye(self.output_size)
+            self.R_mat = torch.eye(self.output_size).to(self.A_mat.device)
+
+        self.logger.debug(
+            f"Type of self.A_Mat id {type(self.A_mat)} and shape {self.A_mat.shape}\n"
+            # Repeat for all above
+            f"Type of self.B_Mat id {type(self.B_mat)} and shape {self.B_mat.shape}\n"
+            f"Type of self.C_Mat id {type(self.C_mat)} and shape {self.C_mat.shape}\n"
+            f"Type of self.Q_Mat id {type(self.Q_mat)} and shape {self.Q_mat.shape}\n"
+            f"Type of self.R_Mat id {type(self.R_mat)} and shape {self.R_mat.shape}\n"
+            f"Type of self.initial_state_mean id {type(self.initial_state_mean)} and shape {self.initial_state_mean.shape}\n"
+        )
+
 
     def _initialize_params(
         self, sequence_length: int, inputs: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor]:
         assert self.initial_state_mean is not None, "Initial State Mean is not provided"
         if inputs is None:
-            inputs = torch.zeros(self.batch_size, sequence_length, self.input_size)
+            inputs = torch.zeros(self.batch_size, sequence_length, self.input_size).to(self.initial_state_mean.device)
 
         # CHECK: If random initiation is correct
-        states_est = torch.zeros(self.batch_size, sequence_length+1, self.state_size)
+        states_est = torch.zeros(self.batch_size, sequence_length+1, self.state_size).to(self.initial_state_mean.device)
         Ps = torch.zeros(
             self.batch_size, sequence_length+1, self.state_size, self.state_size
-        )
+        ).to(self.initial_state_mean.device)
 
         # ~~We initialize the first one gaussian at random~~
         # states[:, 0, :] = torch.randn(self.batch_size, self.state_size)
@@ -64,7 +74,7 @@ class Filter(nn.Module):
         states_est[:, 0, :] =  self.initial_state_mean
         # CHECK: Is identitiy matrix the correct choice here?
         # Prior is set to be of covariance of 1 meaning an assumption of independence
-        Ps[:, 0, :, :] = torch.eye(self.state_size)
+        Ps[:, 0, :, :] = torch.eye(self.state_size).to(self.initial_state_mean.device)
 
         return states_est, Ps, inputs
          
@@ -120,6 +130,7 @@ class Filter(nn.Module):
         assert isinstance(self.Q_mat, torch.Tensor), "Q should be a torch tensor"
         A_expanded = self.A_mat.unsqueeze(0)  # Shape becomes (1, 3, 3)
         B_expanded = self.B_mat.unsqueeze(0)  # Shape becomes (1, 3, 1)
+        self.logger.debug(f"Device for self.A_mat is {self.A_mat.device} while for A_expanded is {A_expanded.device}")
         x_km1_unsq = x_km1.unsqueeze(2)
         uk_unsq = u_k.unsqueeze(2)
         # Now we can use torch.matmul to perform the batch multiplication
@@ -152,10 +163,16 @@ class Filter(nn.Module):
         xpri_k_unsq = xpri_k.unsqueeze(2)
         C_expanded = self.C_mat.unsqueeze(0)
     
+        state_eye = torch.eye(self.state_size).to(self.A_mat.device)
         # Update the estimate with the measurement
         # Numerically unchecked
+        self.logger.debug(f"Shape of xpri_k_unsq is {xpri_k_unsq.shape} with type {type(xpri_k_unsq)} in device {xpri_k_unsq.device}")
+        self.logger.debug(f"Shape of z_k_unsq is {z_k_unsq.shape} with type {type(z_k_unsq)} in device {z_k_unsq.device}")
+        self.logger.debug(f"Shape of C_expanded is {C_expanded.shape} with type {type(C_expanded)} in device {C_expanded.device}")
+        self.logger.debug(f"Shape of K is {K.shape} with type {type(K)} in device {K.device}")
+        self.logger.debug(f"Shape of P_prior is {P_prior.shape} with type {type(P_prior)} in device {P_prior.device}")
         x_post = (xpri_k_unsq + K @ (z_k_unsq - C_expanded @ xpri_k_unsq)).squeeze(2)
-        P_post = (torch.eye(self.state_size) - K @ C_expanded) @ P_prior
+        P_post = (state_eye - K @ C_expanded) @ P_prior
         return x_post, P_post
 
 
