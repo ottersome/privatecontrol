@@ -88,17 +88,17 @@ def trainVAE_wprivacy(
     vae_latent_size: int = 10,
     vae_hidden_size: int = 128,
 ):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ### Learning Objects
     vae = FlexibleVAE(
         input_size=training_metadata.input_dim,
         latent_size=vae_latent_size,
         hidden_size=vae_hidden_size,
-    )
+    ).to(device)
     optimizer = torch.optim.Adam(vae.parameters(), lr=0.001) # type: ignore
 
     ### Data Management
     states, outputs = learning_data # x, y
-    device = states.device
     logger.info(f"Using device is {device}")
     tstates, toutputs = tensor(states), tensor(outputs) # t(x), t(y)
     trn_states, val_states = torch.split(
