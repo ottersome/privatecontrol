@@ -179,7 +179,7 @@ def plot_functions_2by1(
     )
     # ax = np.atleast_2d(ax)  # type: ignore
 
-    plt.tight_layout()
+    plt.tight_layout(pad=5)
 
     colormap = sns.color_palette("husl", num_dim)
     lines_styles = ["-",  "--", "-.", ":"]
@@ -194,7 +194,7 @@ def plot_functions_2by1(
                     color=colormap[s],
                 )
                 ax[n].set_xlabel("Time")
-                ax[n].set_ylabel(indep_func_label)
+                ax[n].set_ylabel("Magnitude")
                 ax[n].set_title(indep_func_label+f" {n+1}")
                 ax[n].legend()
     # Save the figure
@@ -254,7 +254,7 @@ def plot_functions(
         i,j = n // sqrt, n % sqrt
         for s in dims_to_show:
             for f in range(num_functions):
-                label = function_labels[f] + " " + dim_labels[s] if n == 0 else None
+                label = function_labels[f] + " (" + dim_labels[s]+")" if n == 0 else None
                 ax[i, j].plot(
                     functions[n, f, :, s],
                     label=label,
@@ -263,7 +263,8 @@ def plot_functions(
                     color=colormap[s],
                 )
                 ax[i, j].set_xlabel("Time")
-                ax[i, j].set_ylabel(indep_func_label)
+                # ax[i, j].set_ylabel(indep_func_label)
+                ax[i, j].set_ylabel("Magnitude")
                 ax[i, j].set_title(indep_func_label+f" {n+1}")
                 # ax[i, j].legend()
     # Save the figure

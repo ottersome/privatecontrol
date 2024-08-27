@@ -1,15 +1,17 @@
 import argparse
 import os
 import time
-from typing import Tuple, List
+from typing import List, Tuple
 
 import numpy as np
 import torch
 from rich import traceback
 from rich.console import Console
+from rich.live import Live
 from sktime.libs.pykalman import KalmanFilter
 from torch import nn, tensor
 from torch.nn import functional as F
+from tqdm import tqdm
 
 from conrecon.data.dataset_generation import TrainingMetaData, generate_dataset
 from conrecon.dplearning.vae import FlexibleVAE
@@ -17,7 +19,6 @@ from conrecon.kalman.mo_core import Filter
 from conrecon.plotting import TrainLayout, plot_functions, plot_functions_2by1
 from conrecon.ss_generation import hand_design_matrices
 from conrecon.utils import create_logger
-from rich.live import Live
 
 traceback.install()
 
@@ -161,99 +162,98 @@ def trainVAE_wprivacy(
     eval_data = []
     batch_count = int(tstates.shape[0] / batch_size)
     train_layout = TrainLayout(epochs, batch_count, loss_list, eval_data)
-    # with Live(train_layout.layout, console=console, refresh_per_second=1) as live:
-    for e in tqdm(range(epochs), desc="Training at Epoch"):
-        epoch_loss = 0
-        for b in range(batch_count):
-            ## BatchdWise Data
-            t_cur_state = trn_states[b * batch_size : (b + 1) * batch_size].to(device)
-            cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(
-                device
-            )
-            ## Change Data to HideStuff
-            masked_output = vae(cur_output)
-            state_estimates_w_vae = []
-            state_estimates_wo_vae = []
-
-            logger.debug(f"Tell em about the shape of the output {cur_output.shape} as well as its type {type(cur_output)}")
-            logger.debug(f"Shape of masked_output is {masked_output.shape} as well as its type {type(masked_output)}")
-
-            # Go Through Batch
-            for i in range(cur_output.shape[0]):
-                logger.debug(f"Going through the batch {i}")
-                # First without VAE
-                (filtered_mean, filtered_covariance) = kf.filter(
-                    cur_output[i, :, :].squeeze().detach().cpu().numpy()
+    with Live(train_layout.layout, console=console, refresh_per_second=1) as live:
+        for e in range(epochs):
+            epoch_loss = 0
+            for b in range(batch_count):
+                ## BatchdWise Data
+                t_cur_state = trn_states[b * batch_size : (b + 1) * batch_size].to(device)
+                cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(
+                    device
                 )
-                (smoothed_mean, smoothed_covariance) = kf.smooth(
-                    cur_output[i, :, :].squeeze().detach().cpu().numpy()
+                ## Change Data to HideStuff
+                masked_output = vae(cur_output)
+                state_estimates_w_vae = []
+                state_estimates_wo_vae = []
+
+                logger.debug(f"Tell em about the shape of the output {cur_output.shape} as well as its type {type(cur_output)}")
+                logger.debug(f"Shape of masked_output is {masked_output.shape} as well as its type {type(masked_output)}")
+
+                # Go Through Batch
+                for i in range(cur_output.shape[0]):
+                    logger.debug(f"Going through the batch {i}")
+                    # First without VAE
+                    (filtered_mean, filtered_covariance) = kf.filter(
+                        cur_output[i, :, :].squeeze().detach().cpu().numpy()
+                    )
+                    (smoothed_mean, smoothed_covariance) = kf.smooth(
+                        cur_output[i, :, :].squeeze().detach().cpu().numpy()
+                    )
+                    state_estimates_wo_vae.append(smoothed_mean)
+
+                state_estimates_wo_vae = torch.from_numpy(np.array(state_estimates_wo_vae)).to(device)
+                logger.debug(f"Check if tensor requires grad {cur_output.requires_grad}")
+                cur_output.requires_grad = True
+                state_estimates_w_vae = torch_filter(masked_output)
+                logger.debug("Done with the batch. Will add more stuff in a minute")
+
+                # CHECK: This will likely need a torch based implementation to 
+                # have the computation graph involved
+                logger.debug("Before loss estimation")
+                similarities = F.mse_loss(state_estimates_w_vae[:,:,public_dims], t_cur_state[:,:,public_dims])
+                diff = - F.mse_loss(state_estimates_wo_vae[:,:,private_dims], t_cur_state[:,:,private_dims])
+                # similarities = F.mse_loss(state_estimates_w_vae[:,:,1:], t_cur_state[:,:,1:])
+                # diff = - F.mse_loss(state_estimates_wo_vae[:,:,0], t_cur_state[:,:,0])
+                final_loss = similarities + diff
+                fl_mean = final_loss.mean()
+                loss_list.append(fl_mean.item())
+                cur_loss = final_loss.mean().item()
+                
+                logger.debug("Before optimizing.")
+                optimizer.zero_grad()
+                fl_mean.backward()
+                optimizer.step()
+
+
+                # Plot and Save the Reconstruction of Validation Samples
+                inputo = vae(t_val_outputs[:batch_size, :, :])
+                val_state_vae_est = torch_filter(inputo).squeeze().cpu().detach().numpy()
+                func_to_compare = np.stack(
+                    [
+                        t_val_states[:num_valsamps, :, :].squeeze().cpu().detach().numpy(),
+                        val_state_vae_est[:num_valsamps, :, :],
+                        val_samples[:num_valsamps, :, :],
+                    ]
+                ).transpose(1, 0, 2, 3)
+                plot_functions(
+                    func_to_compare,
+                    f"./figures/vae_fixed_recon/plot_vaerecon_eval_{e:02d}_{b:02d}_recon_states.png",
+                    function_labels=["True Value","ITL Method","Control Method"],
+                    dim_labels=dim_labels[:2],
+                    dims_to_show=[0,1]
                 )
-                state_estimates_wo_vae.append(smoothed_mean)
 
-            state_estimates_wo_vae = torch.tensor(state_estimates_wo_vae).to(device)
-            logger.debug(f"Check if tensor requires grad {cur_output.requires_grad}")
-            cur_output.requires_grad = True
-            state_estimates_w_vae = torch_filter(masked_output)
-            logger.debug("Done with the batch. Will add more stuff in a minute")
-
-            # CHECK: This will likely need a torch based implementation to 
-            # have the computation graph involved
-            logger.debug("Before loss estimation")
-            similarities = F.mse_loss(state_estimates_w_vae[:,:,public_dims], t_cur_state[:,:,public_dims])
-            diff = - F.mse_loss(state_estimates_wo_vae[:,:,private_dims], t_cur_state[:,:,private_dims])
-            # similarities = F.mse_loss(state_estimates_w_vae[:,:,1:], t_cur_state[:,:,1:])
-            # diff = - F.mse_loss(state_estimates_wo_vae[:,:,0], t_cur_state[:,:,0])
-            final_loss = similarities + diff
-            fl_mean = final_loss.mean()
-            loss_list.append(fl_mean.item())
-            cur_loss = final_loss.mean().item()
-            
-            logger.debug("Before optimizing.")
-            optimizer.zero_grad()
-            fl_mean.backward()
-            optimizer.step()
+                ## Now compare the outputs by saving their plot
+                func_to_compare = np.stack(
+                    [
+                        cur_output[:2].squeeze().cpu().detach().numpy(),
+                        masked_output[:2].squeeze().cpu().detach().numpy(),
+                    ]
+                ).transpose(1, 0, 2, 3)
+                plot_functions_2by1(
+                    func_to_compare,
+                    f"./figures/vae_fixed_recon/plot_vaerecon_eval_{e:02d}_{b:02d}_recon_outputs.png",
+                    function_labels=["Ground Truth","ITL Method"],
+                    dim_to_show=[1,],
+                )
 
 
-            # Plot and Save the Reconstruction of Validation Samples
-            inputo = vae(t_val_outputs[:batch_size, :, :])
-            val_state_vae_est = torch_filter(inputo).squeeze().cpu().detach().numpy()
-            func_to_compare = np.stack(
-                [
-                    t_val_states[:num_valsamps, :, :].squeeze().cpu().detach().numpy(),
-                    val_state_vae_est[:num_valsamps, :, :],
-                    val_samples[:num_valsamps, :, :],
-                ]
-            ).transpose(1, 0, 2, 3)
-            print(f"Shape of func_to_compare is {func_to_compare.shape}")
-            plot_functions(
-                func_to_compare,
-                f"./figures/vae_fixed_recon/plot_vaerecon_eval_{e:02d}_{b:02d}_recon_states.png",
-                function_labels=["True Value","Our Method + KF","Kalman Filter"],
-                dim_labels=dim_labels[:2],
-                dims_to_show=[0,1]
-            )
+                ## TODO: We need some sort of knob here to play with utility vs privacy
+                train_layout.update(e, b, cur_loss, None)
 
-            ## Now compare the outputs by saving their plot
-            func_to_compare = np.stack(
-                [
-                    cur_output[:2].squeeze().cpu().detach().numpy(),
-                    masked_output[:2].squeeze().cpu().detach().numpy(),
-                ]
-            ).transpose(1, 0, 2, 3)
-            plot_functions_2by1(
-                func_to_compare,
-                f"./figures/vae_fixed_recon/plot_vaerecon_eval_{e:02d}_{b:02d}_recon_outputs.png",
-                function_labels=["True Value","Our Method"],
-                dim_to_show=[1,],
-            )
-
-
-            ## TODO: We need some sort of knob here to play with utility vs privacy
-            train_layout.update(e, b, cur_loss, None)
-
-        # Normal Reporting
-        if (e + 1) % 1 == 0:
-            print("Epoch: {}, Loss: {:.5f}".format(e + 1, epoch_loss))
+            # Normal Reporting
+            if (e + 1) % 1 == 0:
+                print("Epoch: {}, Loss: {:.5f}".format(e + 1, epoch_loss))
 
     # We test with MSE for reconstruction for now
 def main():
