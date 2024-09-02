@@ -3,3 +3,4 @@ figures/
 logs/
 .cache/
 .DS_Store
+.nix-venv

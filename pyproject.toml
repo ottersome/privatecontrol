@@ -7,7 +7,6 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
-chineseize-matplotlib = "^1.2"
 scipy = "^1.13.1"
 control = "^0.10.0"
 torch = "^2.3.0"
@@ -21,11 +20,11 @@ sktime = "^0.31.0"
 seaborn = "^0.13.2"
 
 
-[tool.poetry.group.extras.dependencies]
-debugpy = "^1.8.1"
-catppuccin-matplotlib = "^0.4"
-setuptools = "^70.0.0"
-ipython = "7.16.1"
+# [tool.poetry.group.extras.dependencies]
+# debugpy = "^1.8.1"
+# catppuccin-matplotlib = "^0.4"
+# setuptools = "^70.0.0"
+# ipython = "7.16.1"
 
 [build-system]
 requires = ["poetry-core"]
