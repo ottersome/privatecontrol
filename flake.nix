@@ -72,8 +72,11 @@
         ];
 
         shellHook = ''
-          echo "Welcome to the development shell with Poetry!"
-          export MY_ENV_VAR="value"
+          echo "Welcome to the PrivateControl Environment."
+
+          export IN_FLAKE=1
+          export SHELL=${nixpkgs.legacyPackages.x86_64-linux.zsh}/bin/zsh
+          exec ${nixpkgs.legacyPackages.x86_64-linux.zsh}/bin/zsh
         '';
       };
 
