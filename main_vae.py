@@ -171,6 +171,8 @@ def trainVAE_wprivacy(
                 cur_output = trn_outputs[b * batch_size : (b + 1) * batch_size].to(
                     device
                 )
+                if t_cur_state.shape[0] != batch_size:
+                    continue; # We are nat dealing with smaller sizes.
                 ## Change Data to HideStuff
                 masked_output = vae(cur_output)
                 state_estimates_w_vae = []
