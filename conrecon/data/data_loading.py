@@ -1,19 +1,28 @@
 import pandas as pd
-from typing import List, DefaultDict
+from typing import List, DefaultDict, OrderedDict
 import pdb
 import itertools
+import os
 
-# def load_defacto_data(path: str) -> List:
-#     """
-#     Load the data from the defacto dataset
-#     """
-#     data_so_far = pd.read_csv(path, skiprows=1)
-#
-#     # Let me see how it looks
-#     print(f"Data looks like {data_so_far.head()}")
-#
-#
-#     return data_so_far.values
+def load_defacto_data(path: str) -> OrderedDict[str, pd.DataFrame]:
+    """
+    Load the data from the defacto dataset
+    """
+
+    # Create a list of files starting with `run_` inside of the path
+    files = [f for f in os.listdir(path) if f.startswith("run_")]
+
+    # Organize them by number after the run_
+    sorted_files = sorted(files, key=lambda x: int(x.split(".")[0].split("run_")[1]))
+    obtained_runs = OrderedDict({ f_name : pd.DataFrame() for f_name in sorted_files })
+
+    for f in sorted_files:
+        print(f"Loading run: run {f}")
+        df = pd.read_csv(os.path.join(path,f), index_col=0, header=0)
+        obtained_runs[f] = df
+
+    # Let me see how it looks
+    return obtained_runs
 
 
 def df_from_run(df: pd.DataFrame, features_per_run: int) -> pd.DataFrame:
