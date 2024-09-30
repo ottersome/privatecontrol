@@ -55,6 +55,7 @@ def argsies() -> argparse.Namespace:
     ap.add_argument(
         "-o", "--output_dim", default=2, help="Dimensionality of the output.", type=int
     )
+    ap.add_argument("--defacto_data_raw", default="./data/defacto_data.csv", type=str)
     ap.add_argument("--ds_cache", default=".cache/pykalpkg_ds.csv", type=str)
     ap.add_argument("--vae_ds_cache", default=".cache/pykalpkg_vaeds.csv", type=str)
     ap.add_argument(
