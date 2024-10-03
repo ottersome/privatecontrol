@@ -4,7 +4,7 @@ import pdb
 import itertools
 import os
 
-def load_defacto_data(path: str) -> OrderedDict[str, pd.DataFrame]:
+def load_runs(path: str) -> OrderedDict[str, pd.DataFrame]:
     """
     Load the data from the defacto dataset
     """

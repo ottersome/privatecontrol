@@ -4,3 +4,7 @@ logs/
 .cache/
 .DS_Store
 .nix-venv
+data/defacto.csv
+run_*.csv
+runs.tar
+
