@@ -64,6 +64,7 @@
             poetry env use ${pkgs.python310}/bin/python
             poetry install --no-root
           else # just install poetry shell
+            poetry env use ${pkgs.python310}/bin/python
             echo -e "\033[1;33m Remember to use \`poetry shell\` to activate the environment\033[0m"
           fi
           '';
