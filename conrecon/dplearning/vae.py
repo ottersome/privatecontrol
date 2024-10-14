@@ -40,6 +40,22 @@ class VAE(nn.Module):
         z = self.reparameterize(mu, sigma)
         return self.decode(z)
 
+class DP2VAE(nn.Module):
+    def __init__(self, input_size, latent_size, hidden_size):
+        super(DP2VAE, self).__init__()
+        self.input_size = input_size
+        self.latent_size = latent_size
+        self.hidden_size = hidden_size
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.fc21 = nn.Linear(hidden_size, latent_size)
+        self.fc22 = nn.Linear(hidden_size, latent_size)
+        self.fc3 = nn.Linear(latent_size, hidden_size)
+        self.fc4 = nn.Linear(hidden_size, input_size)
+
+        # Start with normal Normal distribution
+        self.N = Normal(torch.zeros(latent_size), torch.ones(latent_size))
+        self.kl = 0
+
 class FlexibleVAE(nn.Module):
     def __init__(self, input_size, latent_size, hidden_size):
         super(FlexibleVAE, self).__init__()
