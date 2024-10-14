@@ -1,7 +1,7 @@
 import argparse
 import os
 import time
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 import numpy as np
 import torch
@@ -12,7 +12,7 @@ from sktime.libs.pykalman import KalmanFilter
 from torch import nn, tensor
 from torch.nn import functional as F
 from tqdm import tqdm
-
+import pdb
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.vae import FlexibleVAE
 from conrecon.kalman.mo_core import Filter
@@ -30,44 +30,32 @@ def argsies() -> argparse.Namespace:
     ap.add_argument(
         "-e", "--epochs", default=3, help="How many epochs to train for", type=int
     )
-    ap.add_argument(
-        "--num_layers", default=1, help="How many epochs to train for", type=int
-    )
-    ap.add_argument(
-        "--eval_interval", default=100, help="How many epochs to train for", type=int
-    )
-    ap.add_argument(
-        "-n", "--num_samples", default=4, type=int, help="How many Samples to Evaluate"
-    )
-    ap.add_argument(
-        "--eval_size", default=4, help="How many systems to generate", type=int
-    )
-    # Control stuff here
-    ap.add_argument(
-        "-t", "--time_steps", default=12, help="How many systems to generate", type=int
-    )
-    ap.add_argument(
-        "-s", "--state_dim", default=3, help="Dimensionality of the state.", type=int
-    )
-    ap.add_argument(
-        "-i", "--input_dim", default=3, help="Dimensionality of the input.", type=int
-    )
-    ap.add_argument(
-        "-o", "--output_dim", default=2, help="Dimensionality of the output.", type=int
-    )
-    ap.add_argument("--defacto_data_raw_path", default="./data/defacto_data.csv", type=str, help="Where to load the data from")
-    ap.add_argument("--ds_cache", default=".cache/pykalpkg_ds.csv", type=str)
+    ap.add_argument("--defacto_data_raw_path", default="./data/", type=str, help="Where to load the data from")
+    ap.add_argument("--batch_size", default=32)
+    ap.add_argument("--cols_to_hide", default=[4], help="Which are the columsn we want no information of") # Remember 0-index (so 5th)
+    ap.add_argument("--vae_latent_size", default=10, type=int)
+    ap.add_argument("--vae_hidden_size", default=128, type=int)
+    ap.add_argument("--splits", default= { "train_split": 0.8, "val_split" : 0.2, "test_split" : 0.0 } , type=list, nargs="+")
+
+    ap.add_argument("--no-autoindent")
+    ap.add_argument("--seed", default=0, type=int)
+    ap.add_argument("--lr", default=0.001, type=float)
+    ap.add_argument("--first_n_states", default=7, type=int)
+
     ap.add_argument("--vae_ds_cache", default=".cache/pykalpkg_vaeds.csv", type=str)
+    ap.add_argument("--ds_cache", default=".cache/pykalpkg_ds.csv", type=str)
     ap.add_argument(
         "--saveplot_dest",
         default="./figures/pykalman_transformer/",
         help="Where to save the outputs",
     )
-    ap.add_argument("--ds_size", default=10000, type=int)
-    ap.add_argument("--no-autoindent")
-    ap.add_argument("--seed", default=0, type=int)
-    ap.add_argument("--lr", default=0.001, type=float)
-    ap.add_argument("--first_n_states", default=7, type=int)
+
+    ap.add_argument(
+        "--eval_interval", default=100, help="How many epochs to train for", type=int
+    )
+    ap.add_argument(
+        "--eval_size", default=4, help="How many systems to generate", type=int
+    )
 
     args = ap.parse_args()
 
@@ -305,25 +293,60 @@ def train_w_metrics(
     # plt.show()
     #
 
+
+def indiscriminate_supervision(ds: Dict[str, np.ndarray]) -> np.ndarray:
+    """
+    Cannot think of better name for now. 
+    It will:
+        - Take a Dict[str, np.ndarry]. 
+        - Discard keys
+        - Mix around the data that is correlated
+    Yes, these are some assumptinos. But its only to get it running
+    Returns:
+        - np.ndarray: A new data set of shape (len(ds), context_columns))
+    """
+    final_ds = []
+    for k, v in ds.items():
+        final_ds.append(v)
+    # Shuffle it around
+    pdb.set_trace()
+    final_ds = np.random.shuffle(final_ds)
+    return np.array(final_ds)
+
+
 # TODO: Later change the name of the function
-def train_new(
-    model: nn.Module,
-    dataset: Tuple[List[str], List[np.ndarray]],
-    epochs: int,
+def train_v0(
     batch_size: int,
-    saveplot_dest: str,
-    train_percent: float,
+    columns_to_hide: List[int],
+    data_columns: List[str],
     device: torch.device,
+    ds_train: Dict[str, np.ndarray],
+    ds_val: Dict[str, np.ndarray],
+    epochs: int,
+    model: nn.Module,
+    # Some Extra Params
+    saveplot_dest: str,
 ):
     # Dataset comes preloaded as a DF
+    # Organize some of the datasets
+    # CHECK: this actually works
+    pdb.set_trace()
+    columns_to_share = list(set(range(len(data_columns))) - set(columns_to_hide))
 
+    all_train_data = indiscriminate_supervision(ds_train)
+    train_x = all_train_data[:, columns_to_share]
+    train_y = all_train_data[:, columns_to_hide]
 
+    # Similarly for the validation
+    all_val_data = indiscriminate_supervision(ds_val)
+    val_x = all_val_data[:, columns_to_share]
+    val_y = all_val_data[:, columns_to_hide]
+
+    # Now onwards with the model
+
+def train_v1():
+    # TODO: This one will consider better the correlation between these things.
     raise NotImplementedError
-    # We have to train this new batch of things
-    # Dataset is divided on -> Runs, Coluns(time-wise features)
-
-    # Test Set Should be the division of each of the runs into differnt amounts. But then this would mean that we are enforcing a particular batch of time to be hidden.
-    # Which could contain stuff that is not native to our own case 
 
 # TODO: We need to implement federated learning in this particular part of the expression
 def federated():
@@ -372,27 +395,34 @@ class RecoveryNet(nn.Module):
 
 
 
-if __name__ == "__main__":
 
+def main():
     args = argsies()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     np.random.seed(int(time.time()))
     logger = create_logger("main_training")
 
     # TODO: Make it  so that generate_dataset checks if params are the same
-    colums, runs_dict = load_defacto_data(args.defacto_data_raw_path)
+    columns, runs_dict = load_defacto_data(args.defacto_data_raw_path)
 
     # Separate them into their splits
     train_runs, val_runs, test_runs = split_defacto_runs(
         runs_dict,
-        train_split=0.8,
-        val_split=0.2,
-        test_split=0.0,
+        **args.splits,
     )
 
+    # Get Informaiton for the VAE 
+    vae_dimension =  len(columns) - len(args.cols_to_hide)
+    # TODO: Get the model going
+    model = FlexibleVAE(
+        # inout_size for model is output_dim for data
+        input_size=vae_dimension,
+        latent_size=args.vae_latent_size,
+        hidden_size=args.vae_hidden_size,
+    ).to(device)
 
 
-    logger.debug(f"Columns are {colums}")
+    logger.debug(f"Columns are {columns}")
     logger.debug(f"Runs dict is {runs_dict}")
 
     criterion = torch.nn.MSELoss()
@@ -400,7 +430,17 @@ if __name__ == "__main__":
 
     # With the Dataset in Place we Also Generate a Variational Autoencoder
     # vae = train_VAE(outputs) # CHECK: Should we train this first or remove for later
-    vae = train_new():
+    vae = train_new(
+        args.batch_size,
+        args.cols_to_hide,
+        columns,
+        device,
+        train_runs,
+        val_runs,
+        args.epochs,
+        model,
+        args.saveplot_dest,
+    )
 
     # 🚩 Development so far🚩
     exit()
