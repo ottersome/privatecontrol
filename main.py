@@ -13,7 +13,7 @@ from torch import nn, tensor
 from torch.nn import functional as F
 from tqdm import tqdm
 
-from conrecon.data.data_loading import load_defacto_data
+from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.vae import FlexibleVAE
 from conrecon.kalman.mo_core import Filter
 from conrecon.plotting import TrainLayout, plot_functions, plot_functions_2by1
@@ -305,15 +305,18 @@ def train_w_metrics(
     # plt.show()
     #
 
+# TODO: Later change the name of the function
 def train_new(
     model: nn.Module,
-    dataset: Tuple[np.ndarray, np.ndarray],
+    dataset: Tuple[List[str], List[np.ndarray]],
     epochs: int,
     batch_size: int,
     saveplot_dest: str,
     train_percent: float,
     device: torch.device,
 ):
+    # Dataset comes preloaded as a DF
+
 
     raise NotImplementedError
     # We have to train this new batch of things
@@ -374,19 +377,37 @@ if __name__ == "__main__":
     args = argsies()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     np.random.seed(int(time.time()))
+    logger = create_logger("main_training")
 
     # TODO: Make it  so that generate_dataset checks if params are the same
-    data = load_defacto_data(args.defacto_data_raw_path)
+    colums, runs_dict = load_defacto_data(args.defacto_data_raw_path)
+
+    # Separate them into their splits
+    train_runs, val_runs, test_runs = split_defacto_runs(
+        runs_dict,
+        train_split=0.8,
+        val_split=0.2,
+        test_split=0.0,
+    )
+
+
+
+    logger.debug(f"Columns are {colums}")
+    logger.debug(f"Runs dict is {runs_dict}")
 
     criterion = torch.nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001) # type: ignore
 
     # With the Dataset in Place we Also Generate a Variational Autoencoder
     # vae = train_VAE(outputs) # CHECK: Should we train this first or remove for later
-    vae = new_train
+    vae = train_new():
 
     # 🚩 Development so far🚩
     exit()
+
+    # TODO: We might want to do a test run here 
+    # if len(test_runs) > 0:
+    #     test_runs = train_new(test_runs)
 
     # trainVAE_wprivacy(
     #     training_data,
