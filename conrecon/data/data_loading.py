@@ -3,6 +3,8 @@ from typing import List, DefaultDict, OrderedDict
 import pdb
 import itertools
 import os
+import numpy as np
+from typing import Tuple
 
 def load_runs(path: str) -> OrderedDict[str, pd.DataFrame]:
     """
@@ -60,6 +62,77 @@ def df_from_run(df: pd.DataFrame, features_per_run: int) -> pd.DataFrame:
     # Write new_df to csv
     return df_sorted
 
+def split_run(run: np.ndarray, split_percentage: List[float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Will split a run into train, validation and test
+    Returns: in Order: Train, Validation, Test
+    """
+    assert sum(split_percentage) == 1, "Split Percentages should sum to 1"
+    assert len(split_percentage) == 3, "Split Percentages should sum to 1"
+
+    return (
+        run[: int(len(run) * (split_percentage[0]))],
+        run[
+            int(len(run) * (split_percentage[0])) 
+            : int(len(run) * (split_percentage[0] + split_percentage[1]))
+        ],
+        run[int(len(run) * (split_percentage[0] + split_percentage[1])) :],
+    )
+
+
+def split_defacto_runs(
+    run_dict: OrderedDict[str, np.ndarray], 
+    train_split: float,
+    val_split: float,
+    test_split: float,
+) -> Tuple[OrderedDict[str, np.ndarray], OrderedDict[str, np.ndarray], OrderedDict[str, np.ndarray]]:
+    """
+    Will basically split the output of load_defacto_data into train, validation and test
+    Every run will be split into train, validation and test
+    """
+
+    train_ds = OrderedDict()
+    val_ds = OrderedDict()
+    test_ds = OrderedDict()
+    split_percentages = [train_split, val_split, dev_split]
+    for run_name in run_dict.keys():
+        run = run_dict[run_name]
+        # Split the run into train, validation and test
+        train_ds[run_name], val_ds[run_name], test_ds[run_name] = split_run(run, split_percentages)
+    return train_ds, val_ds, test_ds
+
+def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray]]:
+    """
+    Load the data from the defacto dataset
+
+    Returns:
+        - columns_so_far: The columns that are shared across all runs
+        - obtained_runs: A dictionary with the runs as keys and the data as values
+    """
+
+    # Create a list of files starting with `run_` inside of the path
+    columns_so_far = []
+    files = []
+    for ff in os.listdir(path):
+        if ff.startswith("run_"):
+            if columns_so_far == []:
+                columns_so_far = pd.read_csv(os.path.join(path, ff), index_col=0, header=0).columns
+            else:
+                if set(columns_so_far) != set(pd.read_csv(os.path.join(path, ff), index_col=0, header=0).columns):
+                    raise ValueError("Columns are not the same for all runs")
+            files.append(ff)
+
+    # Organize them by number after the run_
+    sorted_files = sorted(files, key=lambda x: int(x.split(".")[0].split("run_")[1]))
+    obtained_runs = OrderedDict({ f_name : np.ndarray([]) for f_name in sorted_files })
+
+    for f in sorted_files:
+        print(f"Loading run: run {f}")
+        df = pd.read_csv(os.path.join(path,f), index_col=0, header=0)
+        obtained_runs[f] = df.values # NOTE: Confirm this doing what we expect it to 
+
+    # Let me see how it looks
+    return columns_so_far, obtained_runs
 
 
 def new_format(path: str, features_per_run: int = 15):
