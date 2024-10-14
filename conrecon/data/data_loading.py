@@ -68,7 +68,7 @@ def split_run(run: np.ndarray, split_percentage: List[float]) -> Tuple[np.ndarra
     Returns: in Order: Train, Validation, Test
     """
     assert sum(split_percentage) == 1, "Split Percentages should sum to 1"
-    assert len(split_percentage) == 3, "Split Percentages should sum to 1"
+    assert len(split_percentage) == 3, "There should be three split_percentages"
 
     return (
         run[: int(len(run) * (split_percentage[0]))],
@@ -94,7 +94,7 @@ def split_defacto_runs(
     train_ds = OrderedDict()
     val_ds = OrderedDict()
     test_ds = OrderedDict()
-    split_percentages = [train_split, val_split, dev_split]
+    split_percentages = [train_split, val_split, test_split]
     for run_name in run_dict.keys():
         run = run_dict[run_name]
         # Split the run into train, validation and test
@@ -115,8 +115,8 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
     files = []
     for ff in os.listdir(path):
         if ff.startswith("run_"):
-            if columns_so_far == []:
-                columns_so_far = pd.read_csv(os.path.join(path, ff), index_col=0, header=0).columns
+            if len(columns_so_far)  == 0:
+                columns_so_far = pd.read_csv(os.path.join(path, ff), index_col=0, header=0).columns.values
             else:
                 if set(columns_so_far) != set(pd.read_csv(os.path.join(path, ff), index_col=0, header=0).columns):
                     raise ValueError("Columns are not the same for all runs")
