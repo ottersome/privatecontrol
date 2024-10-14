@@ -257,20 +257,133 @@ def argsies() -> argparse.Namespace:
 #                 print("Epoch: {}, Loss: {:.5f}".format(e + 1, epoch_loss))
 #
 #     # We test with MSE for reconstruction for now
-def main():
-    args = argsies()
-    # Get our A, B, C Matrices
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    params = hand_design_matrices()
-    np.random.seed(int(time.time()))
 
-    logger.info("Loading dataset")
+
+
+def train_w_metrics(
+    model: nn.Module,
+    dataset: Tuple[np.ndarray, np.ndarray],
+    epochs: int,
+    batch_size: int,
+    saveplot_dest: str,
+    train_percent: float,
+    device: torch.device,
+):
+    tlosses = []
+    vlosses = []
+    train_size = int(len(dataset[0]) * train_percent)
+    batch_count = int(train_size // batch_size)
+    tdataset = (dataset[0][:train_size, :], dataset[1][:train_size, :])
+    vdataset = (dataset[0][train_size:, :], dataset[1][train_size:, :])
+
+    # layout, progress = make_layout(0, tlosses, vlosses)
+    layout = TrainLayout(epochs, batch_count, tlosses, vlosses)
+    batch_num = 0
+    with Live(layout.layout, console=console, refresh_per_second=10) as live:
+        for epoch, batch_no, tloss, vloss in train(
+            model, tdataset, vdataset, epochs, batch_size, saveplot_dest, device
+        ):
+            batch_num += 1
+            logger.debug(f"Batch number: {batch_num}")
+            tlosses.append(tloss)
+            vlosses.append(vloss)
+            layout.update(epoch, batch_no, tloss, vloss)
+
+    # TODO: Recover this
+    # Plot the losses after the episode finishes
+    # t_diff_in_order = np.max(tlosses) - np.min(tlosses) > 1e1
+    # v_diff_in_order = np.max(vlosses) - np.min(vlosses) > 1e1
+    # fig, axs = plt.subplots(1, 2)
+    # axs[0].plot(tlosses)
+    # # if t_diff_in_order:
+    # # axs[0].set_yscale("log")
+    # axs[0].set_title("Training Loss")
+    # axs[1].plot(vlosses)
+    # # if v_diff_in_order:
+    # #     axs[1].set_yscale("log")
+    # axs[1].set_title("Validation Loss")
+    # plt.show()
+    #
+
+def train_new(
+    model: nn.Module,
+    dataset: Tuple[np.ndarray, np.ndarray],
+    epochs: int,
+    batch_size: int,
+    saveplot_dest: str,
+    train_percent: float,
+    device: torch.device,
+):
+
+    raise NotImplementedError
+    # We have to train this new batch of things
+    # Dataset is divided on -> Runs, Coluns(time-wise features)
+
+    # Test Set Should be the division of each of the runs into differnt amounts. But then this would mean that we are enforcing a particular batch of time to be hidden.
+    # Which could contain stuff that is not native to our own case 
+
+# TODO: We need to implement federated learning in this particular part of the expression
+def federated():
+    # We also need a federated aspect to all this. And its getting close to being time to implementing this
+    raise NotImplementedError
+
+class RecoveryNet(nn.Module):
+
+    def __init__(self, input_size, state_size, num_outputs, time_steps):
+        super().__init__()
+        self.mean = torch.zeros(input_size, time_steps)
+        self.variance = torch.zeros(input_size, time_steps)
+        self.rnn = torch.nn.GRU(input_size, state_size, batch_first=True)
+        # Final output layer
+        self.output_layer = torch.nn.Linear(state_size, num_outputs)
+        self.count = 0
+        self.batch_norm = torch.nn.BatchNorm1d(num_features=input_size)
+
+    def forward(self, x):
+        # Normalize x
+        # self.update(x)
+        # normed_x = self.batch_norm(x)
+        # norm_x = (x - self.mean) / (self.variance + 1e-8).sqrt()
+        transposed_x = x.transpose(1, 2)
+        logger.debug(f"Tranposed x looks like {transposed_x}")
+        rnnout, hidden = self.rnn(transposed_x)
+        logger.debug(f"RNN output looks like: {rnnout}")
+        return self.output_layer(F.relu(rnnout)), hidden
+
+    def update(self, x):
+        self.count += 1
+        batch_mean = x.mean(dim=0)
+        batch_var = x.var(dim=0)
+        if self.count == 1:
+            self.mean = batch_mean
+        else:
+            old_mean = self.mean
+            self.mean = (old_mean * (self.count - 1) + batch_mean) / self.count
+            delta = batch_mean - old_mean
+            self.variance = (self.variance * (self.count - 1) + batch_var) / self.count
+
+            # self.variance = (
+            #     self.variance * (self.count - 1)
+            #     + (x - old_mean - delta).pow(2).sum(dim=0)
+            # ) / self.count
+
+
+
+if __name__ == "__main__":
+
+    args = argsies()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    np.random.seed(int(time.time()))
 
     # TODO: Make it  so that generate_dataset checks if params are the same
     data = load_defacto_data(args.defacto_data_raw_path)
 
+    criterion = torch.nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001) # type: ignore
+
     # With the Dataset in Place we Also Generate a Variational Autoencoder
     # vae = train_VAE(outputs) # CHECK: Should we train this first or remove for later
+    vae = new_train
 
     # 🚩 Development so far🚩
     exit()
