@@ -129,13 +129,13 @@ class Decoder(nn.Module):
         return z.reshape((-1, 1, 28, 28))
 
 
-# TODO: Change name
-class VAE_hider:
-    def __init__(self, latent_dims: int=10)
-        super(VAE_hider, self).__init__()
-        self.encoder = Encoder(latent_dims)
-        self.decoder = Decoder(latent_dims)
+class SimpleRegressionModel(nn.Module):
+    def __init__(self, input_size, latent_size, output_size):
+        super().__init__()
+        self.linear1 = nn.Linear(input_size, latent_size)
+        self.linear2 = nn.Linear(latent_size, output_size)
+        self.relu = nn.ReLU()
 
     def forward(self, x):
-        pass
+        return self.linear2(self.relu(self.linear1(x)))
 
