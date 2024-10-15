@@ -229,7 +229,7 @@ def train_v0(
                 metrics = validation_iteration(val_x, val_y, model_vae_adversary)
                 logger.info(f"Validation Metrics are {metrics}")
             
-    return model_vae
+    return model_vae_adversary
 
 
 
