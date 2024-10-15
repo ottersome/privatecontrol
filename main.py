@@ -4,6 +4,7 @@ import time
 from typing import List, Tuple, Dict
 
 import numpy as np
+import random
 import torch
 from rich import traceback
 from rich.console import Console
@@ -19,6 +20,7 @@ from conrecon.kalman.mo_core import Filter
 from conrecon.plotting import TrainLayout, plot_functions, plot_functions_2by1
 from conrecon.ss_generation import hand_design_matrices
 from conrecon.utils import create_logger
+from conrecon.models.models import SimpleRegressionModel
 
 traceback.install()
 
@@ -65,8 +67,6 @@ def argsies() -> argparse.Namespace:
         os.makedirs(".cache/")
     return args
     # Sanity check
-
-
 
 
 def train_w_metrics(
@@ -130,9 +130,38 @@ def indiscriminate_supervision(ds: Dict[str, np.ndarray]) -> np.ndarray:
     for k, v in ds.items():
         final_ds.append(v)
     # Shuffle it around
-    pdb.set_trace()
-    final_ds = np.random.shuffle(final_ds)
-    return np.array(final_ds)
+    final_ds = np.concatenate(final_ds)
+    # TODO: Check that the shuffling is being done right
+    np.random.shuffle(final_ds)
+    return final_ds
+
+def validation_iteration(val_x: np.ndarray, val_y: np.ndarray, model: nn.Module, batch_size: int = 64) -> Dict[str, float]:
+    """
+    Will run a validation iteration for a model
+    Args:
+        - val_x: Validation data
+        - val_y: Validation data
+        - model: Model to run the validation on
+        - col_to_predict: (0-index) which column we would like to predict
+    """
+    metrics = {
+        "recon_loss": [],
+        "adv_loss": [],
+    }
+    model_device = next(model.parameters()).device
+    batchehs = len(val_x) // batch_size
+    for b in range(batchehs):
+        batch_x = torch.Tensor(val_x[b * batch_size : (b + 1) * batch_size]).to(model_device)
+        batch_y = torch.Tensor(val_y[b * batch_size : (b + 1) * batch_size]).to(model_device)
+        if len(batch_x.shape) != batch_size:
+            continue
+        sanitized_data = model(torch.from_numpy(batch_x))
+        recon_loss = F.mse_loss(sanitized_data, batch_x)
+        adv_loss = F.mse_loss(model(sanitized_data), batch_y)
+        metrics["recon_loss"].append(recon_loss.item())
+        metrics["adv_loss"].append(adv_loss.item())
+
+    return {k: np.mean(v).item() for k, v in metrics.items()}
 
 
 # TODO: Later change the name of the function
@@ -144,15 +173,19 @@ def train_v0(
     ds_train: Dict[str, np.ndarray],
     ds_val: Dict[str, np.ndarray],
     epochs: int,
-    model: nn.Module,
+    model_adversary: SimpleRegressionModel,
+    model_vae: FlexibleVAE,
     # Some Extra Params
     saveplot_dest: str,
 ):
-    # Dataset comes preloaded as a DF
-    # Organize some of the datasets
-    # CHECK: this actually works
-    pdb.set_trace()
     columns_to_share = list(set(range(len(data_columns))) - set(columns_to_hide))
+    opt_adversary = torch.optim.Adam(model_adversary.parameters(), lr=0.001) # type: ignore
+    opt_vae = torch.optim.Adam(model_vae.parameters(), lr=0.001) # type: ignore
+
+    device = next(model_vae.parameters()).device
+    assert (
+        device == next(model_adversary.parameters()).device
+    ), "DThe device of the VAE and the adversary should be the same"
 
     all_train_data = indiscriminate_supervision(ds_train)
     train_x = all_train_data[:, columns_to_share]
@@ -163,7 +196,44 @@ def train_v0(
     val_x = all_val_data[:, columns_to_share]
     val_y = all_val_data[:, columns_to_hide]
 
-    # Now onwards with the model
+    batches = train_x.shape[0] // batch_size
+    recon_losses = []
+    for e in range(epochs):
+        logger.info(f"Epoch {e} of {epochs}")
+        for b in range(batches):
+            # Now Get the new VAE generations
+            batch_x = torch.from_numpy(train_x[b * batch_size : (b + 1) * batch_size]).to(torch.float32).to(device)
+            batch_y = torch.from_numpy(train_y[b * batch_size : (b + 1) * batch_size]).to(torch.float32).to(device)
+            if batch_x.shape[0] != batch_size:
+                continue
+            logger.info(f"Batch {b} of {batches} with shape {batch_x.shape}")
+
+            sanitized_data = model_vae(batch_x)
+            adversary_guess = model_adversary(sanitized_data)
+
+            # This should be it 
+            recon_loss = F.mse_loss(sanitized_data, batch_x)
+            adv_loss = F.mse_loss(adversary_guess, batch_y)
+            loss = recon_loss - adv_loss
+            loss.backward()
+
+            model_vae.zero_grad()
+            model_adversary.zero_grad()
+            loss.backward()
+
+            # TODO: Check. This feels on the ilegal side lol
+            opt_vae.step()
+            opt_adversary.step()
+
+            logger.info(f"Epoch {e} Batch {b} Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
+
+            if b % 4 == 0:
+                metrics = validation_iteration(val_x, val_y, model_vae)
+                logger.info(f"Validation Metrics are {metrics}")
+            
+    return model_vae, model_adversary
+
+
 
 def train_v1():
     # TODO: This one will consider better the correlation between these things.
@@ -174,45 +244,41 @@ def federated():
     # We also need a federated aspect to all this. And its getting close to being time to implementing this
     raise NotImplementedError
 
-class RecoveryNet(nn.Module):
 
-    def __init__(self, input_size, state_size, num_outputs, time_steps):
-        super().__init__()
-        self.mean = torch.zeros(input_size, time_steps)
-        self.variance = torch.zeros(input_size, time_steps)
-        self.rnn = torch.nn.GRU(input_size, state_size, batch_first=True)
-        # Final output layer
-        self.output_layer = torch.nn.Linear(state_size, num_outputs)
-        self.count = 0
-        self.batch_norm = torch.nn.BatchNorm1d(num_features=input_size)
+# This ought to be ran iterarively witht the encoder so that this also learns to better extract from the new encoder version
+# TOREM: (Maybe) Consider removing this if you end up moving it elsewhere
+def train_adversary_iteration(
+    adversary: nn.Module,
+    data: torch.Tensor,
+    epochs: int = 1,
+    adv_batch_size: int = 64,
+    col_idx_to_predict: int = 4,
+):
+    """
+    Will train an adversary to guess the next value
+    """
+    adversary.train()
+    criterion = nn.MSELoss()
+    # FIX: Remove the hyperparameters
+    optimizer = torch.optim.Adam(adversary.parameters(), lr=0.001) # type: ignore
 
-    def forward(self, x):
-        # Normalize x
-        # self.update(x)
-        # normed_x = self.batch_norm(x)
-        # norm_x = (x - self.mean) / (self.variance + 1e-8).sqrt()
-        transposed_x = x.transpose(1, 2)
-        logger.debug(f"Tranposed x looks like {transposed_x}")
-        rnnout, hidden = self.rnn(transposed_x)
-        logger.debug(f"RNN output looks like: {rnnout}")
-        return self.output_layer(F.relu(rnnout)), hidden
+    # Once this is just regression
+    for e in range(epochs):
+        for b in range(data.shape[0] // adv_batch_size):
+            # Get the batch
+            adversary.zero_grad()
+            batch_x = data[b * adv_batch_size : (b + 1) * adv_batch_size]
+            batch_y = data[b * adv_batch_size : (b + 1) * adv_batch_size]
+            # Get the prediction
+            preds = adversary(batch_x)
 
-    def update(self, x):
-        self.count += 1
-        batch_mean = x.mean(dim=0)
-        batch_var = x.var(dim=0)
-        if self.count == 1:
-            self.mean = batch_mean
-        else:
-            old_mean = self.mean
-            self.mean = (old_mean * (self.count - 1) + batch_mean) / self.count
-            delta = batch_mean - old_mean
-            self.variance = (self.variance * (self.count - 1) + batch_var) / self.count
+            # Calculate the loss
+            loss = criterion(preds, batch_y)    
+            loss.backward()
+            optimizer.step()
 
-            # self.variance = (
-            #     self.variance * (self.count - 1)
-            #     + (x - old_mean - delta).pow(2).sum(dim=0)
-            # ) / self.count
+    adversary.eval()
+    return adversary
 
 
 
@@ -232,26 +298,28 @@ def main():
         **args.splits,
     )
 
-    # Get Informaiton for the VAE 
-    vae_dimension =  len(columns) - len(args.cols_to_hide)
+    logger.info(f"Using device is {device}")
+
+    # Get Informaiton for the VAE
+    vae_dimension = len(columns) - len(args.cols_to_hide)
     # TODO: Get the model going
-    model = FlexibleVAE(
+    model_vae = FlexibleVAE(
         # inout_size for model is output_dim for data
         input_size=vae_dimension,
         latent_size=args.vae_latent_size,
         hidden_size=args.vae_hidden_size,
     ).to(device)
-
+    model_adversary = SimpleRegressionModel(
+        input_size=vae_dimension, latent_size=args.vae_latent_size, output_size=1
+    ).to(device)
 
     logger.debug(f"Columns are {columns}")
     logger.debug(f"Runs dict is {runs_dict}")
 
-    criterion = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001) # type: ignore
-
     # With the Dataset in Place we Also Generate a Variational Autoencoder
     # vae = train_VAE(outputs) # CHECK: Should we train this first or remove for later
-    vae = train_new(
+    logger.info("Starting the VAE Training")
+    vae = train_v0(
         args.batch_size,
         args.cols_to_hide,
         columns,
@@ -259,7 +327,8 @@ def main():
         train_runs,
         val_runs,
         args.epochs,
-        model,
+        model_adversary,
+        model_vae,
         args.saveplot_dest,
     )
 
