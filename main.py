@@ -15,7 +15,7 @@ from torch.nn import functional as F
 from tqdm import tqdm
 import pdb
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
-from conrecon.dplearning.vae import FlexibleVAE
+from conrecon.dplearning.vae import FlexibleVAE, AdversarialVAE
 from conrecon.kalman.mo_core import Filter
 from conrecon.plotting import TrainLayout, plot_functions, plot_functions_2by1
 from conrecon.ss_generation import hand_design_matrices
@@ -173,19 +173,18 @@ def train_v0(
     ds_train: Dict[str, np.ndarray],
     ds_val: Dict[str, np.ndarray],
     epochs: int,
-    model_adversary: SimpleRegressionModel,
-    model_vae: FlexibleVAE,
+    model_vae_adversary: AdversarialVAE,
     # Some Extra Params
     saveplot_dest: str,
 ):
     columns_to_share = list(set(range(len(data_columns))) - set(columns_to_hide))
-    opt_adversary = torch.optim.Adam(model_adversary.parameters(), lr=0.001) # type: ignore
-    opt_vae = torch.optim.Adam(model_vae.parameters(), lr=0.001) # type: ignore
+    # opt_adversary = torch.optim.Adam(model_adversary.parameters(), lr=0.001) # type: ignore
+    opt_vae = torch.optim.Adam(model_vae_adversary.parameters(), lr=0.001) # type: ignore
 
-    device = next(model_vae.parameters()).device
-    assert (
-        device == next(model_adversary.parameters()).device
-    ), "DThe device of the VAE and the adversary should be the same"
+    device = next(model_vae_adversary.parameters()).device
+    # assert (
+    #     device == next(model_adversary.parameters()).device
+    # ), "DThe device of the VAE and the adversary should be the same"
 
     all_train_data = indiscriminate_supervision(ds_train)
     train_x = all_train_data[:, columns_to_share]
@@ -208,30 +207,29 @@ def train_v0(
                 continue
             logger.info(f"Batch {b} of {batches} with shape {batch_x.shape}")
 
-            sanitized_data = model_vae(batch_x)
-            adversary_guess = model_adversary(sanitized_data)
+            sanitized_data, adversary_guess = model_vae_adversary(batch_x)
+            # adversary_guess = model_adversary(sanitized_data)
 
             # This should be it 
             recon_loss = F.mse_loss(sanitized_data, batch_x)
             adv_loss = F.mse_loss(adversary_guess, batch_y)
             loss = recon_loss - adv_loss
-            loss.backward()
 
-            model_vae.zero_grad()
-            model_adversary.zero_grad()
+            model_vae_adversary.zero_grad()
+            # model_adversary.zero_grad()
             loss.backward()
 
             # TODO: Check. This feels on the ilegal side lol
             opt_vae.step()
-            opt_adversary.step()
+            # opt_adversary.step()
 
             logger.info(f"Epoch {e} Batch {b} Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
 
             if b % 4 == 0:
-                metrics = validation_iteration(val_x, val_y, model_vae)
+                metrics = validation_iteration(val_x, val_y, model_vae_adversary)
                 logger.info(f"Validation Metrics are {metrics}")
             
-    return model_vae, model_adversary
+    return model_vae
 
 
 
@@ -303,14 +301,12 @@ def main():
     # Get Informaiton for the VAE
     vae_dimension = len(columns) - len(args.cols_to_hide)
     # TODO: Get the model going
-    model_vae = FlexibleVAE(
+    model_vae = AdversarialVAE(
         # inout_size for model is output_dim for data
         input_size=vae_dimension,
         latent_size=args.vae_latent_size,
         hidden_size=args.vae_hidden_size,
-    ).to(device)
-    model_adversary = SimpleRegressionModel(
-        input_size=vae_dimension, latent_size=args.vae_latent_size, output_size=1
+        num_features_to_guess=1,
     ).to(device)
 
     logger.debug(f"Columns are {columns}")
@@ -327,7 +323,6 @@ def main():
         train_runs,
         val_runs,
         args.epochs,
-        model_adversary,
         model_vae,
         args.saveplot_dest,
     )
