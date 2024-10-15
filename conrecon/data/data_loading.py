@@ -5,6 +5,7 @@ import itertools
 import os
 import numpy as np
 from typing import Tuple
+from sklearn.impute import KNNImputer
 
 def load_runs(path: str) -> OrderedDict[str, pd.DataFrame]:
     """
@@ -117,6 +118,7 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
         if ff.startswith("run_"):
             if len(columns_so_far)  == 0:
                 columns_so_far = pd.read_csv(os.path.join(path, ff), index_col=0, header=0).columns.values
+                # Impute them if need be 
             else:
                 if set(columns_so_far) != set(pd.read_csv(os.path.join(path, ff), index_col=0, header=0).columns):
                     raise ValueError("Columns are not the same for all runs")
@@ -129,6 +131,9 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
     for f in sorted_files:
         print(f"Loading run: run {f}")
         df = pd.read_csv(os.path.join(path,f), index_col=0, header=0)
+        df.interpolate(inplace=True)
+        # Even after interpolation we might still get initial problems witht the row:
+        df.dropna(inplace=True)
         obtained_runs[f] = df.values # NOTE: Confirm this doing what we expect it to 
 
     # Let me see how it looks
