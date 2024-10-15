@@ -57,6 +57,7 @@ class DP2VAE(nn.Module):
         self.kl = 0
 
 class FlexibleVAE(nn.Module):
+
     def __init__(self, input_size, latent_size, hidden_size):
         super(FlexibleVAE, self).__init__()
         self.input_size = input_size
@@ -74,10 +75,16 @@ class FlexibleVAE(nn.Module):
         self.kl = 0
 
     def encode(self, x):
-        assert len(x.shape) == 3
+        # This normally expects (batch_size, sequence_length, input_size)
+        if len(x.shape) == 3:
+            reshaped_x = x.view(-1, x.shape[-1])
+        elif len(x.shape) == 2:
+            reshaped_x = x
+        else:
+            raise ValueError(f"Shape of x is {x.shape} and its type is {type(x)}")
+
         # Keep x i
         self.logger.debug(f"Shape of x is {x.shape} and its type is {type(x)}")
-        reshaped_x = x.view(-1, x.shape[-1])
         h1 = F.relu(self.fc1(reshaped_x))
         return self.fc21(h1), self.fc22(h1)
 
