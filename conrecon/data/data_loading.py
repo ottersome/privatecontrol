@@ -7,6 +7,7 @@ import numpy as np
 from typing import Tuple
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import MinMaxScaler
+import matplotlib.pyplot as plt
 
 def load_runs(path: str) -> OrderedDict[str, pd.DataFrame]:
     """
@@ -92,30 +93,45 @@ def split_defacto_runs(
     Will basically split the output of load_defacto_data into train, validation and test
     Every run will be split into train, validation and test
     """
+    d_img_path = './imgs/'
 
     train_ds = OrderedDict()
     val_ds = OrderedDict()
     test_ds = OrderedDict()
     split_percentages = [train_split, val_split, test_split]
     all_train_data = []
+    # d_slices = [slice(0,128), slice(3,4)] # Sequence Length and features
+    # d_og_imgs = []
     for run_name in run_dict.keys():
         run = run_dict[run_name]
         # Split the run into train, validation and test
         train_ds[run_name], val_ds[run_name], test_ds[run_name] = split_run(run, split_percentages)
         all_train_data.append(train_ds[run_name])
 
-    pdb.set_trace()
+        # d_og_imgs.append(train_ds[run_name][d_slices[0],d_slices[1]])
+
     all_train = np.concat(list(train_ds.values()))
     scaler = MinMaxScaler()
     scaler.fit(all_train)
 
+    # d_sc_imgs = []
     # TODO: Clean this bit of code if you can 
     # Then normalized it. 
     for run_name in run_dict:
         train_ds[run_name] = scaler.transform(train_ds[run_name])
         val_ds[run_name] = scaler.transform(val_ds[run_name])
         test_ds[run_name] = scaler.transform(val_ds[run_name])
-    pdb.set_trace()
+
+        # d_sc_imgs.append(train_ds[run_name][d_slices[0], d_slices[1]])
+
+    # for i in range(len(d_sc_imgs)):
+    #     # Compare the paragraphs there. 
+    #     fig, axs = plt.subplots(1,2,figsize=(16,10))
+    #     plt.tight_layout()
+    #     # axis = np.concatenate(d_sc_imgs[i].shape[0]*[np.arange(d_og_imgs[i].shape[1])])
+    #     axs[0].plot(d_og_imgs[i],  label="Original Images")
+    #     axs[1].plot(d_sc_imgs[i],  label="New ones")
+    #     plt.show()
 
     return train_ds, val_ds, test_ds
 
@@ -124,7 +140,7 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
     Load the data from the defacto dataset
 
     Returns:
-        - columns_so_far: The columns that are shared across all runs
+        - columns_so_far: The columns that are shred across all runs
         - obtained_runs: A dictionary with the runs as keys and the data as values
     """
 
