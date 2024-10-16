@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
 from conrecon.utils import create_logger
+import pdb
 
 
 class VAE(nn.Module):
@@ -67,14 +68,15 @@ class SeqAdversarialVAE(nn.Module):
         hidden_size: int,
         num_features_to_guess: int,
         rnn_num_layers: int = 1,
+        rnn_hidden_size: int = 32,
     ):
-        super(AdversarialVAE, self).__init__()
+        super(SeqAdversarialVAE, self).__init__()
 
         # This one will have a RNN For encodeing the state data
         self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
         self.path_encoder = nn.LSTM(
             input_size=input_size,
-            hidden_size=hidden_size,
+            hidden_size=rnn_hidden_size,
             num_layers=rnn_num_layers,
             batch_first=True,
         )
@@ -83,7 +85,7 @@ class SeqAdversarialVAE(nn.Module):
         self.input_size = input_size
         self.latent_size = latent_size
         self.hidden_size = hidden_size
-        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.fc1 = nn.Linear(rnn_hidden_size, hidden_size)
         self.fc21 = nn.Linear(hidden_size, latent_size)
         self.fc22 = nn.Linear(hidden_size, latent_size)
         self.fc3 = nn.Linear(latent_size, hidden_size)
@@ -104,7 +106,7 @@ class SeqAdversarialVAE(nn.Module):
     def encode(self, x):
         # This normally expects (batch_size, sequence_length, input_size)
         if len(x.shape) == 3:
-            reshaped_x = x.view(-1, x.shape[-1])
+            reshaped_x = x.reshape(-1, x.shape[-1])
         elif len(x.shape) == 2:
             reshaped_x = x
         else:
@@ -135,16 +137,18 @@ class SeqAdversarialVAE(nn.Module):
             - adversary_guess: The guessed data from the adversary
             - kl: The KL divergence between the posterior and prior (batch_size,)
         """
-        hidden_x = self.path_encoder(x)
-        mu, sigma = self.encode(x)
+        rnn_output, (rnn_hn, rnn_cn)  = self.path_encoder(x)
+        rnn_output_flat = rnn_output.reshape(-1, rnn_output.shape[-1])
+        mu, sigma = self.encode(rnn_output)
         z = self.reparameterize(mu, sigma)
         kl = 0.5 * torch.pow(sigma**2,2) + torch.pow(mu,2) - torch.log(sigma**2) - 1
         kl = kl.sum(dim=-1)
         decoded = self.decode(z)
-        decoded = decoded.view(x.shape)
+        decoded = decoded.reshape(x.shape)
 
         guessed_features = self.adversary(z)
         return decoded, guessed_features, kl
+
 class AdversarialVAE(nn.Module):
     def __init__(
         self,
