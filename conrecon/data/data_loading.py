@@ -99,14 +99,12 @@ def split_defacto_runs(
     val_ds = OrderedDict()
     test_ds = OrderedDict()
     split_percentages = [train_split, val_split, test_split]
-    all_train_data = []
     # d_slices = [slice(0,128), slice(3,4)] # Sequence Length and features
     # d_og_imgs = []
     for run_name in run_dict.keys():
         run = run_dict[run_name]
         # Split the run into train, validation and test
         train_ds[run_name], val_ds[run_name], test_ds[run_name] = split_run(run, split_percentages)
-        all_train_data.append(train_ds[run_name])
 
         # d_og_imgs.append(train_ds[run_name][d_slices[0],d_slices[1]])
 
@@ -119,8 +117,10 @@ def split_defacto_runs(
     # Then normalized it. 
     for run_name in run_dict:
         train_ds[run_name] = scaler.transform(train_ds[run_name])
-        val_ds[run_name] = scaler.transform(val_ds[run_name])
-        test_ds[run_name] = scaler.transform(val_ds[run_name])
+        if len(val_ds[run_name]) > 0 :
+            val_ds[run_name] = scaler.transform(val_ds[run_name])
+        if len(test_ds[run_name]) > 0 :
+            test_ds[run_name] = scaler.transform(test_ds[run_name])
 
         # d_sc_imgs.append(train_ds[run_name][d_slices[0], d_slices[1]])
 
