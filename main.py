@@ -35,7 +35,7 @@ def argsies() -> argparse.Namespace:
     ap.add_argument("--defacto_data_raw_path", default="./data/", type=str, help="Where to load the data from")
     ap.add_argument("--batch_size", default=32, type=int)
     ap.add_argument("--cols_to_hide", default=[4], help="Which are the columsn we want no information of") # Remember 0-index (so 5th)
-    ap.add_argument("--vae_latent_size", default=32, type=int)
+    ap.add_argument("--vae_latent_size", default=128, type=int)
     ap.add_argument("--vae_hidden_size", default=128, type=int)
     ap.add_argument("--splits", default= { "train_split": 0.8, "val_split" : 0.2, "test_split" : 0.0 } , type=list, nargs="+")
 
@@ -189,7 +189,11 @@ def validation_iteration(
         # For my own semantical convenience
         non_sanitized_data = episode_x
         sanitized_data, guessed_features, _  = model(episode_x)
-
+        
+        # plt.hist(episode_x.view(-1).detach().cpu().numpy(), bins=100)
+        # plt.title(f"Validatio Sanitized Episode Input Dist {e}")
+        # plt.show()
+        
         # These two vectors are of shape (1, sequence_length, num_features)
         # We want features to be in the same plot, and differerent sequences in differnt plots
         axs[e,0].plot(non_sanitized_data[:,3].squeeze().detach().cpu().numpy(), label=f"True $f_{e}$")
@@ -259,12 +263,13 @@ def train_v0(
 
     # Alternate debugging version
     validation_episodes_list: List[np.ndarray] = validation_data_organization(
-        ds_val, snapshot_length=128, num_episodes=3
+        ds_train, snapshot_length=128, num_episodes=3
     )
     validation_episodes_tensor =  torch.from_numpy(np.stack(validation_episodes_list)).to(device)
 
     batches = train_x.shape[0] // batch_size
     recon_losses = []
+    d_sanitized_dist = []
     for e in range(epochs):
         logger.info(f"Epoch {e} of {epochs}")
         # losses_for_dist = []
@@ -279,11 +284,16 @@ def train_v0(
             sanitized_data, adversary_guess, kl_divergence = model_vae_adversary(batch_x)
             # adversary_guess = model_adversary(sanitized_data)
 
+            # logger.info(f"batch_x sum is {batch_x.sum()}")
+            # plt.hist(batch_x.flatten().detach().cpu().numpy(), bins=100)
+            # plt.title(f"Training Sanitized Episode Input Dist {e}")
+            # plt.show()
+            #
             # This should be it 
             recon_loss = F.mse_loss(sanitized_data, batch_x, reduction="none")
             # adv_loss = F.mse_loss(adversary_guess, batch_y)
             # losses_for_dist.append(recon_loss.view(-1).tolist())
-            loss = recon_loss.mean() - kl_divergence.mean()
+            loss = recon_loss.mean() 
 
             # model_adversary.zero_grad()
             model_vae_adversary.zero_grad()
@@ -344,7 +354,7 @@ def train_adversary_iteration(
     adversary.train()
     criterion = nn.MSELoss()
     # FIX: Remove the hyperparameters
-    optimizer = torch.optim.Adam(adversary.parameters(), lr=0.001) # type: ignore
+    optimizer = torch.optim.Adam(adversary.parameters(), lr=0.01) # type: ignore
 
     # Once this is just regression
     for e in range(epochs):

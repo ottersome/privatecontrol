@@ -59,6 +59,92 @@ class DP2VAE(nn.Module):
         self.kl = 0
 
 
+class SeqAdversarialVAE(nn.Module):
+    def __init__(
+        self,
+        input_size: int,
+        latent_size: int,
+        hidden_size: int,
+        num_features_to_guess: int,
+        rnn_num_layers: int = 1,
+    ):
+        super(AdversarialVAE, self).__init__()
+
+        # This one will have a RNN For encodeing the state data
+        self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
+        self.path_encoder = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=rnn_num_layers,
+            batch_first=True,
+        )
+        # Once we have the path encoder 
+
+        self.input_size = input_size
+        self.latent_size = latent_size
+        self.hidden_size = hidden_size
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.fc21 = nn.Linear(hidden_size, latent_size)
+        self.fc22 = nn.Linear(hidden_size, latent_size)
+        self.fc3 = nn.Linear(latent_size, hidden_size)
+        self.fc4 = nn.Linear(hidden_size, input_size)
+        self.logger = create_logger(__class__.__name__)
+
+        # For adversary
+        self.adversary = nn.Sequential(
+            nn.Linear(latent_size, latent_size*2),
+            nn.ReLU(),
+            nn.Linear(latent_size*2, num_features_to_guess),
+        )
+        self.relu = nn.ReLU()
+
+        # Start with normal Normal distribution
+        self.N = Normal(0, 1)
+
+    def encode(self, x):
+        # This normally expects (batch_size, sequence_length, input_size)
+        if len(x.shape) == 3:
+            reshaped_x = x.view(-1, x.shape[-1])
+        elif len(x.shape) == 2:
+            reshaped_x = x
+        else:
+            raise ValueError(f"Shape of x is {x.shape} and its type is {type(x)}")
+
+        # Keep x i
+        self.logger.debug(f"Shape of x is {x.shape} and its type is {type(x)}")
+        h1 = F.relu(self.fc1(reshaped_x))
+        return self.fc21(h1), self.fc22(h1)
+
+    def reparameterize(self, mu, sigma) -> torch.Tensor:
+        d0 = sigma * self.N.sample(mu.shape).to(sigma.device)
+        z = mu + d0
+        # CHECK: this to be correct.
+        # self.kl = (sigma**2 + mu**2 - torch.log(sigma) - 1/2).sum()
+        return z
+
+    def decode(self, z):
+        h3 = F.relu(self.fc3(z))
+        return self.fc4(h3)
+
+    def forward(self, x):
+        """
+        Args:
+            - x: The input data (batch_size, sequence_length, input_size)
+        Returns:
+            - decoded: The decoded data
+            - adversary_guess: The guessed data from the adversary
+            - kl: The KL divergence between the posterior and prior (batch_size,)
+        """
+        hidden_x = self.path_encoder(x)
+        mu, sigma = self.encode(x)
+        z = self.reparameterize(mu, sigma)
+        kl = 0.5 * torch.pow(sigma**2,2) + torch.pow(mu,2) - torch.log(sigma**2) - 1
+        kl = kl.sum(dim=-1)
+        decoded = self.decode(z)
+        decoded = decoded.view(x.shape)
+
+        guessed_features = self.adversary(z)
+        return decoded, guessed_features, kl
 class AdversarialVAE(nn.Module):
     def __init__(
         self,
