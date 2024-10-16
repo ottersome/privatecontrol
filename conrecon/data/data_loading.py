@@ -6,6 +6,7 @@ import os
 import numpy as np
 from typing import Tuple
 from sklearn.impute import KNNImputer
+from sklearn.preprocessing import MinMaxScaler
 
 def load_runs(path: str) -> OrderedDict[str, pd.DataFrame]:
     """
@@ -96,10 +97,26 @@ def split_defacto_runs(
     val_ds = OrderedDict()
     test_ds = OrderedDict()
     split_percentages = [train_split, val_split, test_split]
+    all_train_data = []
     for run_name in run_dict.keys():
         run = run_dict[run_name]
         # Split the run into train, validation and test
         train_ds[run_name], val_ds[run_name], test_ds[run_name] = split_run(run, split_percentages)
+        all_train_data.append(train_ds[run_name])
+
+    pdb.set_trace()
+    all_train = np.concat(list(train_ds.values()))
+    scaler = MinMaxScaler()
+    scaler.fit(all_train)
+
+    # TODO: Clean this bit of code if you can 
+    # Then normalized it. 
+    for run_name in run_dict:
+        train_ds[run_name] = scaler.transform(train_ds[run_name])
+        val_ds[run_name] = scaler.transform(val_ds[run_name])
+        test_ds[run_name] = scaler.transform(val_ds[run_name])
+    pdb.set_trace()
+
     return train_ds, val_ds, test_ds
 
 def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray]]:
@@ -127,6 +144,8 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
     # Organize them by number after the run_
     sorted_files = sorted(files, key=lambda x: int(x.split(".")[0].split("run_")[1]))
     obtained_runs = OrderedDict({ f_name : np.ndarray([]) for f_name in sorted_files })
+
+    # Now lets show it
 
     for f in sorted_files:
         print(f"Loading run: run {f}")
