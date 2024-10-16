@@ -303,6 +303,11 @@ def train_v0(
                 # plt.hist(losses_for_dist, bins=100)
                 # plt.savefig(f"./figures/new_data_vae/plot_vaerecon_losses_{e:02d}_{b:02d}.png")
 
+                # meepo = sanitized_data.view(-1).tolist()
+                # plt.hist(meepo, bins=100)
+                # plt.savefig(f"./figures/new_data_vae/plot_vaerecon_losses_{e:02d}_{b:02d}.png")
+                # plt.close()
+                
     # Plot some old stuff
     # Try to pllot some stuff just for the sake of debugging
     # New plot
