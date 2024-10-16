@@ -35,7 +35,7 @@ def argsies() -> argparse.Namespace:
     ap.add_argument("--defacto_data_raw_path", default="./data/", type=str, help="Where to load the data from")
     ap.add_argument("--batch_size", default=32, type=int)
     ap.add_argument("--cols_to_hide", default=[4], help="Which are the columsn we want no information of") # Remember 0-index (so 5th)
-    ap.add_argument("--vae_latent_size", default=10, type=int)
+    ap.add_argument("--vae_latent_size", default=32, type=int)
     ap.add_argument("--vae_hidden_size", default=128, type=int)
     ap.add_argument("--splits", default= { "train_split": 0.8, "val_split" : 0.2, "test_split" : 0.0 } , type=list, nargs="+")
 
@@ -167,6 +167,7 @@ def validation_iteration(
         "recon_loss": [],
         "adv_loss": [],
     }
+    model.eval()
     if validation_episodes.shape[0] > 3:
         raise ValueError("You may be using too many samples. Please reduce the number of samples")
 
@@ -175,9 +176,13 @@ def validation_iteration(
     val_y = validation_episodes[:, :, idxs_colsToGuess]
     model_device = next(model.parameters()).device
 
-    plt.figure(figsize=(16, 10), dpi=300)
+    fig,axs = plt.subplots(val_x.shape[0],2,figsize=(16, 10), dpi=300)
+    plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1, hspace=0.5, wspace=0.5)
     plt.tight_layout()
+    plt.title("Validation Data")
+    features_to_check = [5]
     for e in range(val_x.shape[0]):
+
         episode_x = val_x[e, :, :].to(torch.float32).to(model_device)
         episode_y = val_y[e, :, :].to(torch.float32).to(model_device)
 
@@ -187,19 +192,24 @@ def validation_iteration(
 
         # These two vectors are of shape (1, sequence_length, num_features)
         # We want features to be in the same plot, and differerent sequences in differnt plots
-        plt.plot(non_sanitized_data.squeeze().detach().cpu().numpy(), label=f"True $f_{e}$")
+        axs[e,0].plot(non_sanitized_data[:,3].squeeze().detach().cpu().numpy(), label=f"True $f_{e}$")
+        axs[e,0].set_title(f'Non-Sanitized episode {e}')
+        axs[e,1].plot(sanitized_data[:,3].squeeze().detach().cpu().numpy(), label=f"True $f_{e}$")
+        axs[e,1].set_title(f'Sanitized episode  {e}')
 
         # TODO: Also plot the guessed features on the 2nd column
         
-        recon_loss = F.mse_loss(sanitized_data, episode_x)
+        recon_loss = F.mse_loss(sanitized_data, episode_x, reduction='mean')
+        logger.debug(f"The mean loss for this episode was: {recon_loss.item()}")
         # adv_loss = F.mse_loss(model(sanitized_data), episode_y)
-        metrics["recon_loss"].append(recon_loss.item())
+        metrics["recon_loss"].append(recon_loss.mean().item())
         # metrics["adv_loss"].append(adv_loss.item())
 
     # lets now save the figure
-    plt.savefig(save_path)
+    plt.savefig(save_path, bbox_inches='tight', pad_inches=0.1)
     plt.close()
     
+    model.train()
 
     return {k: np.mean(v).item() for k, v in metrics.items()}
 
@@ -223,8 +233,7 @@ def train_v0(
     # Some Extra Params
     saveplot_dest: str,
 ):
-    columns_to_share = list(set(range(len(data_columns))) - set(columns_to_hide))
-    # opt_adversary = torch.optim.Adam(model_adversary.parameters(), lr=0.001) # type: ignore
+    feature_columns = list(set(range(len(data_columns))) - set(columns_to_hide))
     opt_vae = torch.optim.Adam(model_vae_adversary.parameters(), lr=0.001) # type: ignore
 
     device = next(model_vae_adversary.parameters()).device
@@ -233,7 +242,7 @@ def train_v0(
     # ), "DThe device of the VAE and the adversary should be the same"
 
     all_train_data = indiscriminate_supervision(ds_train)
-    train_x = all_train_data[:, columns_to_share]
+    train_x = all_train_data[:, feature_columns]
     train_y = all_train_data[:, columns_to_hide]
 
     # Similarly for the validation
@@ -241,15 +250,24 @@ def train_v0(
     # val_x = all_val_data[:, columns_to_share]
     # val_y = all_val_data[:, columns_to_hide]
     # Validation data will not be shuffled since we vant to visualize the results in time series
-    validation_episodes: List[np.ndarray] = validation_data_organization(
-        ds_val, snapshot_length=12, num_episodes=3
+
+    # # Original Data
+    # validation_episodes_list: List[np.ndarray] = validation_data_organization(
+    #     ds_val, snapshot_length=128, num_episodes=3
+    # )
+    # validation_episodes_tensor =  torch.from_numpy(np.stack(validation_episodes_list)).to(device)
+
+    # Alternate debugging version
+    validation_episodes_list: List[np.ndarray] = validation_data_organization(
+        ds_val, snapshot_length=128, num_episodes=3
     )
-    validation_episodes: torch.Tensor = torch.from_numpy(np.stack(validation_episodes)).to(device)
+    validation_episodes_tensor =  torch.from_numpy(np.stack(validation_episodes_list)).to(device)
 
     batches = train_x.shape[0] // batch_size
     recon_losses = []
     for e in range(epochs):
         logger.info(f"Epoch {e} of {epochs}")
+        # losses_for_dist = []
         for b in range(batches):
             # Now Get the new VAE generations
             batch_x = torch.from_numpy(train_x[b * batch_size : (b + 1) * batch_size]).to(torch.float32).to(device)
@@ -262,29 +280,34 @@ def train_v0(
             # adversary_guess = model_adversary(sanitized_data)
 
             # This should be it 
-            recon_loss = F.mse_loss(sanitized_data, batch_x, reduction="mean")
-            adv_loss = F.mse_loss(adversary_guess, batch_y)
-            loss = (recon_loss - kl_divergence.sum())
+            recon_loss = F.mse_loss(sanitized_data, batch_x, reduction="none")
+            # adv_loss = F.mse_loss(adversary_guess, batch_y)
+            # losses_for_dist.append(recon_loss.view(-1).tolist())
+            loss = recon_loss.mean() - kl_divergence.mean()
 
             # model_adversary.zero_grad()
             model_vae_adversary.zero_grad()
-            logger.info(f"Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
+            # logger.info(f"Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
             loss.backward()
-            recon_losses.append(recon_loss.item())
+            recon_losses.append(recon_loss.mean().item())
 
             opt_vae.step()
             # logger.info(f"Epoch {e} Batch {b} Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
 
-            if b % 4 == 0:
+            if b % 16 == 0:
                 save_path = f"./figures/new_data_vae/plot_vaerecon_eval_{e:02d}_{b:02d}.png"
-                metrics = validation_iteration(validation_episodes, columns_to_hide, model_vae_adversary, save_path)
+                metrics = validation_iteration(validation_episodes_tensor, columns_to_hide, model_vae_adversary, save_path)
                 logger.info(f"Validation Metrics are {metrics}")
             
+                # Plot the histogram of losses
+                # plt.hist(losses_for_dist, bins=100)
+                # plt.savefig(f"./figures/new_data_vae/plot_vaerecon_losses_{e:02d}_{b:02d}.png")
+
+    # Plot some old stuff
     # Try to pllot some stuff just for the sake of debugging
     # New plot
     plt.plot(recon_losses)
     # Save the plot
-    plt.savefig(f"plot.png")
     plt.show()
 
     return model_vae_adversary
@@ -339,11 +362,17 @@ def train_adversary_iteration(
 
 
 
+def set_all_seeds(seed: int):
+    import numpy as np
+    import torch
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
 
 def main():
     args = argsies()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    np.random.seed(int(time.time()))
+    set_all_seeds(args.seed)
     logger = create_logger("main_training")
 
     # TODO: Make it  so that generate_dataset checks if params are the same
