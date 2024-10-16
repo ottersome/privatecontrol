@@ -88,7 +88,6 @@ class AdversarialVAE(nn.Module):
 
         # Start with normal Normal distribution
         self.N = Normal(0, 1)
-        self.kl = 0
 
     def encode(self, x):
         # This normally expects (batch_size, sequence_length, input_size)
@@ -104,15 +103,11 @@ class AdversarialVAE(nn.Module):
         h1 = F.relu(self.fc1(reshaped_x))
         return self.fc21(h1), self.fc22(h1)
 
-    def reparameterize(self, mu, sigma):
-        self.logger.debug(f"The sigma and mu shapes are ({sigma.shape},{mu.shape})")
-        sample = self.N.sample(mu.shape)
-        self.logger.debug(f"Shape of sample is {sample.shape}")
+    def reparameterize(self, mu, sigma) -> torch.Tensor:
         d0 = sigma * self.N.sample(mu.shape).to(sigma.device)
         z = mu + d0
         # CHECK: this to be correct.
         # self.kl = (sigma**2 + mu**2 - torch.log(sigma) - 1/2).sum()
-        self.kl = 0.5 * torch.sum(sigma**2 + mu**2 - torch.log(sigma**2) - 1)
         return z
 
     def decode(self, z):
@@ -120,13 +115,21 @@ class AdversarialVAE(nn.Module):
         return self.fc4(h3)
 
     def forward(self, x):
+        """
+        Returns:
+            - decoded: The decoded data
+            - adversary_guess: The guessed data from the adversary
+            - kl: The KL divergence between the posterior and prior (batch_size,)
+        """
         mu, sigma = self.encode(x)
         z = self.reparameterize(mu, sigma)
+        kl = 0.5 * torch.pow(sigma**2,2) + torch.pow(mu,2) - torch.log(sigma**2) - 1
+        kl = kl.sum(dim=-1)
         decoded = self.decode(z)
         decoded = decoded.view(x.shape)
 
         guessed_features = self.adversary(z)
-        return decoded, guessed_features
+        return decoded, guessed_features, kl
 
 
 class FlexibleVAE(nn.Module):

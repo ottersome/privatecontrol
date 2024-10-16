@@ -1,7 +1,7 @@
 import argparse
 import os
 import time
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Sequence
 
 import numpy as np
 import random
@@ -9,7 +9,6 @@ import torch
 from rich import traceback
 from rich.console import Console
 from rich.live import Live
-from sktime.libs.pykalman import KalmanFilter
 from torch import nn, tensor
 from torch.nn import functional as F
 from tqdm import tqdm
@@ -21,6 +20,7 @@ from conrecon.plotting import TrainLayout, plot_functions, plot_functions_2by1
 from conrecon.ss_generation import hand_design_matrices
 from conrecon.utils import create_logger
 from conrecon.models.models import SimpleRegressionModel
+import matplotlib.pyplot as plt
 
 traceback.install()
 
@@ -33,7 +33,7 @@ def argsies() -> argparse.Namespace:
         "-e", "--epochs", default=3, help="How many epochs to train for", type=int
     )
     ap.add_argument("--defacto_data_raw_path", default="./data/", type=str, help="Where to load the data from")
-    ap.add_argument("--batch_size", default=32)
+    ap.add_argument("--batch_size", default=32, type=int)
     ap.add_argument("--cols_to_hide", default=[4], help="Which are the columsn we want no information of") # Remember 0-index (so 5th)
     ap.add_argument("--vae_latent_size", default=10, type=int)
     ap.add_argument("--vae_hidden_size", default=128, type=int)
@@ -135,12 +135,31 @@ def indiscriminate_supervision(ds: Dict[str, np.ndarray]) -> np.ndarray:
     np.random.shuffle(final_ds)
     return final_ds
 
-def validation_iteration(val_x: np.ndarray, val_y: np.ndarray, model: nn.Module, batch_size: int = 64) -> Dict[str, float]:
+
+def validation_data_organization(
+    ds: Dict[str, np.ndarray],  snapshot_length: int = 12, num_episodes: int = 3
+) -> List[np.ndarray]:
+    """
+    Will take random snapshots of samples from the validation data.
+    """
+    episodes = []
+    for i in range(num_episodes):
+        random_bucket_key = np.random.choice(list(ds.keys()))
+        random_bucket = ds[random_bucket_key]
+        bucket_length = len(random_bucket)
+        random_position = np.random.randint(bucket_length - snapshot_length)
+        episodes.append(random_bucket[random_position : random_position + snapshot_length])
+
+    return episodes
+
+# TODO: Fix this. It is not working
+def validation_iteration(
+    validation_episodes: torch.Tensor, idxs_colsToGuess: Sequence[int], model: nn.Module, save_path: str = "./figures/new_data_vae/plot_vaerecon_eval_{}.png"
+) -> Dict[str, float]:
     """
     Will run a validation iteration for a model
     Args:
-        - val_x: Validation data
-        - val_y: Validation data
+        - validation_episodes: Validation data (num_episodes, epsode_length, num_features)
         - model: Model to run the validation on
         - col_to_predict: (0-index) which column we would like to predict
     """
@@ -148,21 +167,48 @@ def validation_iteration(val_x: np.ndarray, val_y: np.ndarray, model: nn.Module,
         "recon_loss": [],
         "adv_loss": [],
     }
+    if validation_episodes.shape[0] > 3:
+        raise ValueError("You may be using too many samples. Please reduce the number of samples")
+
+    cols_as_features = list(set((range(validation_episodes.shape[2]))) - set(idxs_colsToGuess))
+    val_x = validation_episodes[:, :, cols_as_features]
+    val_y = validation_episodes[:, :, idxs_colsToGuess]
     model_device = next(model.parameters()).device
-    batchehs = len(val_x) // batch_size
-    for b in range(batchehs):
-        batch_x = torch.Tensor(val_x[b * batch_size : (b + 1) * batch_size]).to(model_device)
-        batch_y = torch.Tensor(val_y[b * batch_size : (b + 1) * batch_size]).to(model_device)
-        if len(batch_x.shape) != batch_size:
-            continue
-        sanitized_data = model(torch.from_numpy(batch_x))
-        recon_loss = F.mse_loss(sanitized_data, batch_x)
-        adv_loss = F.mse_loss(model(sanitized_data), batch_y)
+
+    plt.figure(figsize=(16, 10), dpi=300)
+    plt.tight_layout()
+    for e in range(val_x.shape[0]):
+        episode_x = val_x[e, :, :].to(torch.float32).to(model_device)
+        episode_y = val_y[e, :, :].to(torch.float32).to(model_device)
+
+        # For my own semantical convenience
+        non_sanitized_data = episode_x
+        sanitized_data, guessed_features, _  = model(episode_x)
+
+        # These two vectors are of shape (1, sequence_length, num_features)
+        # We want features to be in the same plot, and differerent sequences in differnt plots
+        plt.plot(non_sanitized_data.squeeze().detach().cpu().numpy(), label=f"True $f_{e}$")
+
+        # TODO: Also plot the guessed features on the 2nd column
+        
+        recon_loss = F.mse_loss(sanitized_data, episode_x)
+        # adv_loss = F.mse_loss(model(sanitized_data), episode_y)
         metrics["recon_loss"].append(recon_loss.item())
-        metrics["adv_loss"].append(adv_loss.item())
+        # metrics["adv_loss"].append(adv_loss.item())
+
+    # lets now save the figure
+    plt.savefig(save_path)
+    plt.close()
+    
 
     return {k: np.mean(v).item() for k, v in metrics.items()}
 
+
+def compare_reconstruction():
+    """
+    Will take the original set of features and 
+    """
+    raise NotImplementedError
 
 # TODO: Later change the name of the function
 def train_v0(
@@ -191,9 +237,14 @@ def train_v0(
     train_y = all_train_data[:, columns_to_hide]
 
     # Similarly for the validation
-    all_val_data = indiscriminate_supervision(ds_val)
-    val_x = all_val_data[:, columns_to_share]
-    val_y = all_val_data[:, columns_to_hide]
+    # all_val_data = indiscriminate_supervision(ds_val)
+    # val_x = all_val_data[:, columns_to_share]
+    # val_y = all_val_data[:, columns_to_hide]
+    # Validation data will not be shuffled since we vant to visualize the results in time series
+    validation_episodes: List[np.ndarray] = validation_data_organization(
+        ds_val, snapshot_length=12, num_episodes=3
+    )
+    validation_episodes: torch.Tensor = torch.from_numpy(np.stack(validation_episodes)).to(device)
 
     batches = train_x.shape[0] // batch_size
     recon_losses = []
@@ -207,28 +258,35 @@ def train_v0(
                 continue
             logger.info(f"Batch {b} of {batches} with shape {batch_x.shape}")
 
-            sanitized_data, adversary_guess = model_vae_adversary(batch_x)
+            sanitized_data, adversary_guess, kl_divergence = model_vae_adversary(batch_x)
             # adversary_guess = model_adversary(sanitized_data)
 
             # This should be it 
-            recon_loss = F.mse_loss(sanitized_data, batch_x)
+            recon_loss = F.mse_loss(sanitized_data, batch_x, reduction="mean")
             adv_loss = F.mse_loss(adversary_guess, batch_y)
-            loss = recon_loss - adv_loss
+            loss = (recon_loss - kl_divergence.sum())
 
-            model_vae_adversary.zero_grad()
             # model_adversary.zero_grad()
+            model_vae_adversary.zero_grad()
+            logger.info(f"Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
             loss.backward()
+            recon_losses.append(recon_loss.item())
 
-            # TODO: Check. This feels on the ilegal side lol
             opt_vae.step()
-            # opt_adversary.step()
-
-            logger.info(f"Epoch {e} Batch {b} Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
+            # logger.info(f"Epoch {e} Batch {b} Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
 
             if b % 4 == 0:
-                metrics = validation_iteration(val_x, val_y, model_vae_adversary)
+                save_path = f"./figures/new_data_vae/plot_vaerecon_eval_{e:02d}_{b:02d}.png"
+                metrics = validation_iteration(validation_episodes, columns_to_hide, model_vae_adversary, save_path)
                 logger.info(f"Validation Metrics are {metrics}")
             
+    # Try to pllot some stuff just for the sake of debugging
+    # New plot
+    plt.plot(recon_losses)
+    # Save the plot
+    plt.savefig(f"plot.png")
+    plt.show()
+
     return model_vae_adversary
 
 
@@ -276,6 +334,7 @@ def train_adversary_iteration(
             optimizer.step()
 
     adversary.eval()
+
     return adversary
 
 
