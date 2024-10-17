@@ -139,9 +139,10 @@ class SeqAdversarialVAE(nn.Module):
         """
         rnn_output, (rnn_hn, rnn_cn)  = self.path_encoder(x)
         rnn_output_flat = rnn_output.reshape(-1, rnn_output.shape[-1])
-        mu, sigma = self.encode(rnn_output)
+        mu, sigma_pre = self.encode(rnn_output)
+        sigma = torch.exp(sigma_pre)
         z = self.reparameterize(mu, sigma)
-        kl = 0.5 * torch.pow(sigma**2,2) + torch.pow(mu,2) - torch.log(sigma**2) - 1
+        kl = 0.5 * (torch.pow(sigma,2) + torch.pow(mu,2) - torch.log(torch.pow(sigma,2)) - 1)
         kl = kl.sum(dim=-1)
         decoded = self.decode(z)
         decoded = decoded.reshape(x.shape)
@@ -262,7 +263,7 @@ class FlexibleVAE(nn.Module):
         z = mu + d0
         # CHECK: this to be correct.
         # self.kl = (sigma**2 + mu**2 - torch.log(sigma) - 1/2).sum()
-        self.kl = 0.5 * torch.sum(sigma**2 + mu**2 - torch.log(sigma**2) - 1)
+        self.kl = 0.5 * torch.sum(sigma**2 + mu**2 - torch.log(torch.pow(sigma,2)) - 1)
         return z
 
     def decode(self, z):
