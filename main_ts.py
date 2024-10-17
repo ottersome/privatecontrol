@@ -34,18 +34,18 @@ def argsies() -> argparse.Namespace:
         "-e", "--epochs", default=10, help="How many epochs to train for", type=int
     )
     ap.add_argument("--defacto_data_raw_path", default="./data/", type=str, help="Where to load the data from")
-    ap.add_argument("--batch_size", default=32, type=int)
+    ap.add_argument("--batch_size", default=16, type=int)
     ap.add_argument("--rnn_num_layers", default=2, type=int)
     ap.add_argument("--cols_to_hide", default=[4], help="Which are the columsn we want no information of") # Remember 0-index (so 5th)
-    ap.add_argument("--vae_latent_size", default=128, type=int)
+    ap.add_argument("--vae_latent_size", default=64, type=int)
     ap.add_argument("--episode_length", default=32, type=int)
     ap.add_argument("--episode_gap", default=3, type=int)
-    ap.add_argument("--vae_hidden_size", default=128, type=int)
+    ap.add_argument("--vae_hidden_size", default=32, type=int)
     ap.add_argument("--splits", default= { "train_split": 0.8, "val_split" : 0.2, "test_split" : 0.0 } , type=list, nargs="+")
 
     ap.add_argument("--no-autoindent")
     ap.add_argument("--seed", default=0, type=int)
-    ap.add_argument("--lr", default=0.01, type=float)
+    ap.add_argument("--lr", default=0.001, type=float)
     ap.add_argument("--first_n_states", default=7, type=int)
 
     ap.add_argument("--vae_ds_cache", default=".cache/pykalpkg_vaeds.csv", type=str)
@@ -291,23 +291,26 @@ def train_v0(
 
     # TODO: Original Data for Validataion
     validation_episodes_list: List[np.ndarray] = validation_data_organization(
-        ds_val, snapshot_length=episode_length, num_episodes=3
+        ds_train, snapshot_length=episode_length, num_episodes=3
     )
     validation_episodes_tensor =  torch.from_numpy(np.stack(validation_episodes_list)).to(device)
 
-    batches = train_x.shape[0] // batch_size
+    num_batches = train_x.shape[0] // batch_size
+    logger.info(f"Working with {train_x.shape[0]} samples")
     recon_losses = []
     d_sanitized_dist = []
     for e in range(epochs):
         logger.info(f"Epoch {e} of {epochs}")
         # losses_for_dist = []
-        for b in range(batches):
+        for b in range(num_batches):
             # Now Get the new VAE generations
+            model_vae_adversary.zero_grad()
             batch_x = torch.from_numpy(train_x[b * batch_size : (b + 1) * batch_size]).to(torch.float32).to(device)
+            recon_data = batch_x.clone().requires_grad_(False)
             batch_y = torch.from_numpy(train_y[b * batch_size : (b + 1) * batch_size]).to(torch.float32).to(device)
             if batch_x.shape[0] != batch_size:
                 continue
-            logger.info(f"Batch {b} of {batches} with shape {batch_x.shape}")
+            logger.info(f"Batch {b} of {num_batches} with shape {batch_x.shape}")
 
             # What do we do here.
             sanitized_data, adversary_guess, kl_divergence = model_vae_adversary(batch_x)
@@ -319,13 +322,12 @@ def train_v0(
             # plt.show()
             #
             # This should be it 
-            recon_loss = F.mse_loss(sanitized_data, batch_x, reduction="none")
+            recon_loss = F.mse_loss(sanitized_data, recon_data, reduction="none")
             # adv_loss = F.mse_loss(adversary_guess, batch_y)
             # losses_for_dist.append(recon_loss.view(-1).tolist())
-            loss = recon_loss.mean() - kl_divergence.mean()
+            loss = recon_loss.mean() #- kl_divergence.mean()
 
             # model_adversary.zero_grad()
-            model_vae_adversary.zero_grad()
             # logger.info(f"Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
             loss.backward()
             recon_losses.append(recon_loss.mean().item())
@@ -351,6 +353,7 @@ def train_v0(
     # Try to pllot some stuff just for the sake of debugging
     # New plot
     plt.plot(recon_losses)
+    plt.title("Reconstruction Loss")
     # Save the plot
     plt.show()
 
