@@ -117,11 +117,12 @@ class SeqAdversarialVAE(nn.Module):
         h1 = F.relu(self.fc1(reshaped_x))
         return self.fc21(h1), self.fc22(h1)
 
-    def reparameterize(self, mu, sigma) -> torch.Tensor:
-        d0 = sigma * self.N.sample(mu.shape).to(sigma.device)
-        z = mu + d0
-        # CHECK: this to be correct.
-        # self.kl = (sigma**2 + mu**2 - torch.log(sigma) - 1/2).sum()
+    def reparameterize(self, mu, logvar) -> torch.Tensor:
+        # d0 = sigma * self.N.sample(mu.shape).to(sigma.device)
+        # z = mu + d0
+        std = torch.exp(0.5*logvar)
+        eps = torch.randn_like(std)
+        z = mu + eps*std
         return z
 
     def decode(self, z):
@@ -139,10 +140,11 @@ class SeqAdversarialVAE(nn.Module):
         """
         rnn_output, (rnn_hn, rnn_cn)  = self.path_encoder(x)
         rnn_output_flat = rnn_output.reshape(-1, rnn_output.shape[-1])
-        mu, sigma_pre = self.encode(rnn_output)
-        sigma = torch.exp(sigma_pre)
-        z = self.reparameterize(mu, sigma)
-        kl = 0.5 * (torch.pow(sigma,2) + torch.pow(mu,2) - torch.log(torch.pow(sigma,2)) - 1)
+        mu, logvar = self.encode(rnn_output_flat)
+        z = self.reparameterize(mu, logvar)
+        var = torch.exp(logvar)
+        # kl = 0.5 * (torch.pow(sigma,2) + torch.pow(mu,2) - torch.log(torch.pow(sigma,2)) - 1)
+        kl = 0.5 * (var + torch.pow(mu,2) - logvar - 1).reshape(x.shape[0], x.shape[1], -1)
         kl = kl.sum(dim=-1)
         decoded = self.decode(z)
         decoded = decoded.reshape(x.shape)

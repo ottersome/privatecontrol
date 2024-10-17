@@ -37,7 +37,7 @@ def argsies() -> argparse.Namespace:
     ap.add_argument("--batch_size", default=16, type=int)
     ap.add_argument("--rnn_num_layers", default=2, type=int)
     ap.add_argument("--cols_to_hide", default=[4], help="Which are the columsn we want no information of") # Remember 0-index (so 5th)
-    ap.add_argument("--vae_latent_size", default=64, type=int)
+    ap.add_argument("--vae_latent_size", default=32, type=int)
     ap.add_argument("--episode_length", default=32, type=int)
     ap.add_argument("--episode_gap", default=3, type=int)
     ap.add_argument("--vae_hidden_size", default=32, type=int)
@@ -197,44 +197,39 @@ def validation_iteration(
         raise ValueError("You may be using too many samples. Please reduce the number of samples")
 
     cols_as_features = list(set((range(validation_episodes.shape[2]))) - set(idxs_colsToGuess))
-    val_x = validation_episodes[:, :, cols_as_features]
-    val_y = validation_episodes[:, :, idxs_colsToGuess]
     model_device = next(model.parameters()).device
+    val_x = validation_episodes[:, :, cols_as_features].to(torch.float32).to(model_device)
+    val_y = validation_episodes[:, :, idxs_colsToGuess].to(torch.float32).to(model_device)
 
     fig,axs = plt.subplots(val_x.shape[0],2,figsize=(16, 10), dpi=300)
     plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1, hspace=0.5, wspace=0.5)
     plt.tight_layout()
     plt.title("Validation Data")
     features_to_check = [5]
+
+    sanitized_data, guessed_features, _  = model(val_x)
+    non_sanitized_data = val_x
+
+
+    # Old stuff for reference
     for e in range(val_x.shape[0]):
 
-        episode_x = val_x[e, :, :].to(torch.float32).to(model_device)
-        episode_y = val_y[e, :, :].to(torch.float32).to(model_device)
-
-        # For my own semantical convenience
-        non_sanitized_data = episode_x
-        sanitized_data, guessed_features, _  = model(episode_x)
-        
-        # plt.hist(episode_x.view(-1).detach().cpu().numpy(), bins=100)
-        # plt.title(f"Validatio Sanitized Episode Input Dist {e}")
-        # plt.show()
         
         # These two vectors are of shape (1, sequence_length, num_features)
         # We want features to be in the same plot, and differerent sequences in differnt plots
-        all_data = torch.cat([episode_x, sanitized_data])
+        all_data = torch.cat([non_sanitized_data[e,:,:], sanitized_data[e, :, :]])
         min = torch.min(all_data)
         max = torch.max(all_data)
-        axs[e,0].plot(non_sanitized_data[:,6].squeeze().detach().cpu().numpy(), label=f"True $f_{e}$")
+        axs[e,0].plot(non_sanitized_data[e,:,6].squeeze().detach().cpu().numpy(), label=f"True $f_{e}$")
         axs[e,0].set_title(f'Non-Sanitized episode {e}')
-        axs[e,1].plot(sanitized_data[:,6].squeeze().detach().cpu().numpy(), label=f"True $f_{e}$")
+        axs[e,1].plot(sanitized_data[e,:,6].squeeze().detach().cpu().numpy(), label=f"True $f_{e}$")
         axs[e,1].set_title(f'Sanitized episode  {e}')
         # Now set Y_scale
         # axs[e,0].set_ylim(min.item(), max.item())
         # axs[e,1].set_ylim(min.item(), max.item())
 
-        # TODO: Also plot the guessed features on the 2nd column
         
-        recon_loss = F.mse_loss(sanitized_data, episode_x, reduction='mean')
+        recon_loss = F.mse_loss(sanitized_data[e,:,:], non_sanitized_data[e,:,:], reduction='mean')
         logger.debug(f"The mean loss for this episode was: {recon_loss.item()}")
         # adv_loss = F.mse_loss(model(sanitized_data), episode_y)
         metrics["recon_loss"].append(recon_loss.mean().item())
@@ -325,7 +320,7 @@ def train_v0(
             recon_loss = F.mse_loss(sanitized_data, recon_data, reduction="none")
             # adv_loss = F.mse_loss(adversary_guess, batch_y)
             # losses_for_dist.append(recon_loss.view(-1).tolist())
-            loss = recon_loss.mean() #- kl_divergence.mean()
+            loss = (recon_loss.mean(-1) - kl_divergence).mean()
 
             # model_adversary.zero_grad()
             # logger.info(f"Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
