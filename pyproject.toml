@@ -29,6 +29,7 @@ numpy = "^2.1.2"
 scikit-learn = "^1.5.2"
 pyqt5 = "^5.15.11"
 pyqt6 = "^6.7.1"
+debugpy = "^1.8.11"
 
 [build-system]
 requires = ["poetry-core"]

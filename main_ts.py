@@ -22,6 +22,7 @@ from conrecon.ss_generation import hand_design_matrices
 from conrecon.utils import create_logger
 from conrecon.models.models import SimpleRegressionModel
 import matplotlib.pyplot as plt
+import debugpy
 
 traceback.install()
 
@@ -62,6 +63,9 @@ def argsies() -> argparse.Namespace:
     ap.add_argument(
         "--eval_size", default=4, help="How many systems to generate", type=int
     )
+
+    ap.add_argument("--debug", "-d", action="store_true", help="Whether or not to use debugpy for trainig")
+    ap.add_argument("--debug_port", default=42019, type=int, help="Port to attach debugpy to listen to.")
 
     args = ap.parse_args()
 
@@ -416,6 +420,11 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     set_all_seeds(args.seed)
     logger = create_logger("main_training")
+
+    if args.debug:
+        logger.info("\033[1;33m Waiting for debugger to attach...\033[0m")
+        debugpy.listen(("0.0.0.0", args.debug_port))
+        debugpy.wait_for_client()
 
     # TODO: Make it  so that generate_dataset checks if params are the same
     columns, runs_dict = load_defacto_data(args.defacto_data_raw_path)
