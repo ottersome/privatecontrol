@@ -146,8 +146,8 @@ def indiscriminate_supervision(ds: Dict[str, np.ndarray]) -> np.ndarray:
 def timeseries_ds_formation(ds: Dict[str, np.ndarray], episode_length: int, gap: int):
     final_ds = []
     # Calculate the distances
-    hop_distance = episode_length-gap
-     
+    hop_distance = episode_length - gap
+
     rollouts = []
     for k, v in ds.items():
         for h in range(ceil(v.shape[0]//hop_distance)):
@@ -429,7 +429,7 @@ def main():
     # TODO: Make it  so that generate_dataset checks if params are the same
     columns, runs_dict = load_defacto_data(args.defacto_data_raw_path)
 
-    # Separate them into their splits
+    # Separate them into their splits (and also interpolate) 
     train_runs, val_runs, test_runs = split_defacto_runs(
         runs_dict,
         **args.splits,
