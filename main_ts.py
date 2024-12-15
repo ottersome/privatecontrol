@@ -150,7 +150,7 @@ def timeseries_ds_formation(ds: Dict[str, np.ndarray], episode_length: int, gap:
 
     rollouts = []
     for k, v in ds.items():
-        for h in range(ceil(v.shape[0]//hop_distance)):
+        for h in range(ceil(v.shape[0] // hop_distance)):
             offset = hop_distance * h
             logger.info(f"({k}: len({v.shape[0]})): Adding att offset {offset} to {offset+episode_length}")
             rollout = v[offset:offset+episode_length, :]
@@ -166,7 +166,7 @@ def timeseries_ds_formation(ds: Dict[str, np.ndarray], episode_length: int, gap:
 
 
 def validation_data_organization(
-    ds: Dict[str, np.ndarray],  snapshot_length: int = 12, num_episodes: int = 3
+    ds: Dict[str, np.ndarray], snapshot_length: int = 12, num_episodes: int = 3
 ) -> List[np.ndarray]:
     """
     Will take random snapshots of samples from the validation data.
@@ -183,7 +183,10 @@ def validation_data_organization(
 
 # TODO: Fix this. It is not working
 def validation_iteration(
-    validation_episodes: torch.Tensor, idxs_colsToGuess: Sequence[int], model: nn.Module, save_path: str = "./figures/new_data_vae/plot_vaerecon_eval_{}.png"
+    validation_episodes: torch.Tensor,
+    idxs_colsToGuess: Sequence[int],
+    model: nn.Module,
+    save_path: str = "./figures/new_data_vae/plot_vaerecon_eval_{}.png",
 ) -> Dict[str, float]:
     """
     Will run a validation iteration for a model
@@ -211,28 +214,31 @@ def validation_iteration(
     plt.title("Validation Data")
     features_to_check = [5]
 
-    sanitized_data, guessed_features, _  = model(val_x)
+    sanitized_data, guessed_features, _ = model(val_x)
     non_sanitized_data = val_x
-
 
     # Old stuff for reference
     for e in range(val_x.shape[0]):
 
-        
         # These two vectors are of shape (1, sequence_length, num_features)
         # We want features to be in the same plot, and differerent sequences in differnt plots
-        all_data = torch.cat([non_sanitized_data[e,:,:], sanitized_data[e, :, :]])
+        all_data = torch.cat([non_sanitized_data[e, :, :], sanitized_data[e, :, :]])
         min = torch.min(all_data)
         max = torch.max(all_data)
-        axs[e,0].plot(non_sanitized_data[e,:,6].squeeze().detach().cpu().numpy(), label=f"True $f_{e}$")
-        axs[e,0].set_title(f'Non-Sanitized episode {e}')
-        axs[e,1].plot(sanitized_data[e,:,6].squeeze().detach().cpu().numpy(), label=f"True $f_{e}$")
-        axs[e,1].set_title(f'Sanitized episode  {e}')
+        axs[e, 0].plot(
+            non_sanitized_data[e, :, 6].squeeze().detach().cpu().numpy(),
+            label=f"True $f_{e}$",
+        )
+        axs[e, 0].set_title(f"Non-Sanitized episode {e}")
+        axs[e, 1].plot(
+            sanitized_data[e, :, 6].squeeze().detach().cpu().numpy(),
+            label=f"True $f_{e}$",
+        )
+        axs[e, 1].set_title(f"Sanitized episode  {e}")
         # Now set Y_scale
         # axs[e,0].set_ylim(min.item(), max.item())
         # axs[e,1].set_ylim(min.item(), max.item())
 
-        
         recon_loss = F.mse_loss(sanitized_data[e,:,:], non_sanitized_data[e,:,:], reduction='mean')
         logger.debug(f"The mean loss for this episode was: {recon_loss.item()}")
         # adv_loss = F.mse_loss(model(sanitized_data), episode_y)
@@ -240,9 +246,9 @@ def validation_iteration(
         # metrics["adv_loss"].append(adv_loss.item())
 
     # lets now save the figure
-    plt.savefig(save_path, bbox_inches='tight', pad_inches=0.1)
+    plt.savefig(save_path, bbox_inches="tight", pad_inches=0.1)
     plt.close()
-    
+
     model.train()
 
     return {k: np.mean(v).item() for k, v in metrics.items()}
@@ -250,7 +256,7 @@ def validation_iteration(
 
 def compare_reconstruction():
     """
-    Will take the original set of features and 
+    Will take the original set of features and
     """
     raise NotImplementedError
 
@@ -281,6 +287,8 @@ def train_v0(
     all_train_data = timeseries_ds_formation(ds_train, episode_length, episode_gap)
     train_x = all_train_data[:, :, feature_columns]
     train_y = all_train_data[:, :, columns_to_hide]
+    sequence_length = train_x.shape[1]
+    num_priv_cols = train_y.shape[2]
 
     # Similarly for the validation
     # all_val_data = indiscriminate_supervision(ds_val)
@@ -301,26 +309,32 @@ def train_v0(
     for e in range(epochs):
         logger.info(f"Epoch {e} of {epochs}")
         # losses_for_dist = []
+        adversary_losses_batch = []
         for b in range(num_batches):
             # Now Get the new VAE generations
             model_vae_adversary.zero_grad()
             batch_x = torch.from_numpy(train_x[b * batch_size : (b + 1) * batch_size]).to(torch.float32).to(device)
-            recon_data = batch_x.clone().requires_grad_(False)
             batch_y = torch.from_numpy(train_y[b * batch_size : (b + 1) * batch_size]).to(torch.float32).to(device)
+            recon_data = batch_x.clone().requires_grad_(False)
             if batch_x.shape[0] != batch_size:
                 continue
             logger.info(f"Batch {b} of {num_batches} with shape {batch_x.shape}")
 
-            # What do we do here.
-            sanitized_data, adversary_guess, kl_divergence = model_vae_adversary(batch_x)
-            # adversary_guess = model_adversary(sanitized_data)
+            # Get the adversary to guess the sensitive column
+            sanitized_data, adversary_guess_flat, kl_divergence = model_vae_adversary(batch_x)
 
             # logger.info(f"batch_x sum is {batch_x.sum()}")
             # plt.hist(batch_x.flatten().detach().cpu().numpy(), bins=100)
             # plt.title(f"Training Sanitized Episode Input Dist {e}")
             # plt.show()
-            #
-            # This should be it 
+
+            # Guess vs Actual Data. i.e. How powerful can an adversary get ?
+            # We start simple by some RMSE
+            adversary_guess = adversary_guess_flat.reshape(batch_size, sequence_length, num_priv_cols )
+            adversary_power = F.mse_loss(adversary_guess, batch_y)
+            adversary_losses_batch.append(adversary_power.item())
+
+            # This should be it
             recon_loss = F.mse_loss(sanitized_data, recon_data, reduction="none")
             # adv_loss = F.mse_loss(adversary_guess, batch_y)
             # losses_for_dist.append(recon_loss.view(-1).tolist())
@@ -338,7 +352,7 @@ def train_v0(
                 save_path = f"./figures/new_data_vae/plot_vaerecon_eval_{e:02d}_{b:02d}.png"
                 metrics = validation_iteration(validation_episodes_tensor, columns_to_hide, model_vae_adversary, save_path)
                 logger.info(f"Validation Metrics are {metrics}")
-            
+
                 # Plot the histogram of losses
                 # plt.hist(losses_for_dist, bins=100)
                 # plt.savefig(f"./figures/new_data_vae/plot_vaerecon_losses_{e:02d}_{b:02d}.png")
@@ -347,7 +361,7 @@ def train_v0(
                 # plt.hist(meepo, bins=100)
                 # plt.savefig(f"./figures/new_data_vae/plot_vaerecon_losses_{e:02d}_{b:02d}.png")
                 # plt.close()
-                
+
     # Plot some old stuff
     # Try to pllot some stuff just for the sake of debugging
     # New plot
@@ -357,7 +371,6 @@ def train_v0(
     plt.show()
 
     return model_vae_adversary
-
 
 
 def train_v1():
@@ -398,7 +411,7 @@ def train_adversary_iteration(
             preds = adversary(batch_x)
 
             # Calculate the loss
-            loss = criterion(preds, batch_y)    
+            loss = criterion(preds, batch_y)
             loss.backward()
             optimizer.step()
 
@@ -407,10 +420,10 @@ def train_adversary_iteration(
     return adversary
 
 
-
 def set_all_seeds(seed: int):
     import numpy as np
     import torch
+
     np.random.seed(seed)
     torch.manual_seed(seed)
 
@@ -473,7 +486,7 @@ def main():
     # 🚩 development so far🚩
     exit()
 
-    # todo: we might want to do a test run here 
+    # todo: we might want to do a test run here
     # if len(test_runs) > 0:
     #     test_runs = train_new(test_runs)
 
