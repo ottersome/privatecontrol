@@ -61,6 +61,10 @@ class DP2VAE(nn.Module):
 
 
 class SeqAdversarialVAE(nn.Module):
+
+    # ADVERSARY_SOURCE = "DECODED" # For taking decoded output
+    ADVERSARY_SOURCE = "LATENT" # For using latent features
+
     def __init__(
         self,
         input_size: int,
@@ -93,11 +97,13 @@ class SeqAdversarialVAE(nn.Module):
         self.logger = create_logger(__class__.__name__)
 
         # For adversary
+        adversary_input_size = latent_size if self.ADVERSARY_SOURCE == "LATENT" else input_size
         self.adversary = nn.Sequential(
-            nn.Linear(latent_size, latent_size*2),
+            nn.Linear(adversary_input_size, adversary_input_size*2),
             nn.ReLU(),
-            nn.Linear(latent_size*2, num_features_to_guess),
+            nn.Linear(adversary_input_size*2, num_features_to_guess),
         )
+
         self.relu = nn.ReLU()
 
         # Start with normal Normal distribution
@@ -149,7 +155,17 @@ class SeqAdversarialVAE(nn.Module):
         decoded = self.decode(z)
         decoded = decoded.reshape(x.shape)
 
-        guessed_features = self.adversary(z)
+        # NOTE: See if there is any difference between guessing from latent features vs decoded_features. 
+        # guessed_features = self.adversary(z)
+        if self.ADVERSARY_SOURCE == "LATENT":
+            guessed_features = self.adversary(z)    
+        elif self.ADVERSARY_SOURCE == "DECODED":
+            guessed_features = self.adversary(
+                decoded.reshape(-1, decoded.shape[-1])
+            ).reshape(decoded.shape[0], decoded.shape[1],-1)
+        else:
+            raise ValueError(f"ADVERSARY_SOURCE is {self.ADVERSARY_SOURCE} and it is not valid")
+
         return decoded, guessed_features, kl
 
 class AdversarialVAE(nn.Module):
