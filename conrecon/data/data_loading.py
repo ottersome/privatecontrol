@@ -177,7 +177,7 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
 
 def new_format(path: str, features_per_run: int = 15):
     """
-    This will only be for conveting the csv to a new more amenable format
+    This will only be for converting the csv to a new more amenable format
     args:
         - path: The path to the csv file
         - features_per_run: The number of features per run.
