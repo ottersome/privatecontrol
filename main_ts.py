@@ -322,15 +322,10 @@ def train_v0(
             # plt.title(f"Training Sanitized Episode Input Dist {e}")
             # plt.show()
 
-            # Guess vs Actual Data. i.e. How powerful can an adversary get ?
-            # We start simple by some RMSE
-            adversary_guess = adversary_guess_flat.reshape(batch_size, sequence_length, num_priv_cols )
-            adversary_power = F.mse_loss(adversary_guess, batch_y)
-            adversary_losses_batch.append(adversary_power.item())
-
             # This should be it
             recon_loss = F.mse_loss(sanitized_data, recon_data, reduction="none")
-            # adv_loss = F.mse_loss(adversary_guess, batch_y)
+            batch_y_flat = batch_y.view(-1,batch_y.shape[-1])
+            adv_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
             # losses_for_dist.append(recon_loss.view(-1).tolist())
             loss = (recon_loss.mean(-1) - kl_divergence).mean()
 
