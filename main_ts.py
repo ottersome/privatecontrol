@@ -14,7 +14,8 @@ from torch import nn
 from torch.nn import functional as F
 
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
-from conrecon.dplearning.vae import SeqAdversarialVAE
+from conrecon.dplearning.adversaries import Adversary
+from conrecon.dplearning.vae import SequentialVAE
 from conrecon.plotting import TrainLayout
 from conrecon.utils import create_logger
 
@@ -22,21 +23,37 @@ traceback.install()
 
 console = Console()
 
+
 def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     # State stuff here
     ap.add_argument(
-        "-e", "--epochs", default=10, help="How many epochs to train for", type=int
+        "-e", "--epochs", default=8, help="How many epochs to train for", type=int
     )
-    ap.add_argument("--defacto_data_raw_path", default="./data/", type=str, help="Where to load the data from")
+    ap.add_argument(
+        "--defacto_data_raw_path",
+        default="./data/",
+        type=str,
+        help="Where to load the data from",
+    )
     ap.add_argument("--batch_size", default=16, type=int)
     ap.add_argument("--rnn_num_layers", default=2, type=int)
-    ap.add_argument("--cols_to_hide", default=[4], help="Which are the columsn we want no information of") # Remember 0-index (so 5th)
+    ap.add_argument(
+        "--cols_to_hide",
+        default=[4],
+        help="Which are the columsn we want no information of",
+    )  # Remember 0-index (so 5th)
     ap.add_argument("--vae_latent_size", default=32, type=int)
     ap.add_argument("--episode_length", default=32, type=int)
     ap.add_argument("--episode_gap", default=3, type=int)
     ap.add_argument("--vae_hidden_size", default=32, type=int)
-    ap.add_argument("--splits", default= { "train_split": 0.8, "val_split" : 0.2, "test_split" : 0.0 } , type=list, nargs="+")
+    ap.add_argument(
+        "--splits",
+        default={"train_split": 0.8, "val_split": 0.2, "test_split": 0.0},
+        type=list,
+        nargs="+",
+    )
+    ap.add_argument("--kl_dig_hypr", default=0.01, type=float)
 
     ap.add_argument("--no-autoindent")
     ap.add_argument("--seed", default=0, type=int)
@@ -59,8 +76,18 @@ def argsies() -> argparse.Namespace:
         "--eval_size", default=4, help="How many systems to generate", type=int
     )
 
-    ap.add_argument("--debug", "-d", action="store_true", help="Whether or not to use debugpy for trainig")
-    ap.add_argument("--debug_port", default=42019, type=int, help="Port to attach debugpy to listen to.")
+    ap.add_argument(
+        "--debug",
+        "-d",
+        action="store_true",
+        help="Whether or not to use debugpy for trainig",
+    )
+    ap.add_argument(
+        "--debug_port",
+        default=42019,
+        type=int,
+        help="Port to attach debugpy to listen to.",
+    )
 
     args = ap.parse_args()
 
@@ -120,9 +147,9 @@ def train_w_metrics(
 
 def indiscriminate_supervision(ds: Dict[str, np.ndarray]) -> np.ndarray:
     """
-    Cannot think of better name for now. 
+    Cannot think of better name for now.
     It will:
-        - Take a Dict[str, np.ndarry]. 
+        - Take a Dict[str, np.ndarry].
         - Discard keys
         - Mix around the data that is correlated
     Yes, these are some assumptinos. But its only to get it running
@@ -138,6 +165,7 @@ def indiscriminate_supervision(ds: Dict[str, np.ndarray]) -> np.ndarray:
     np.random.shuffle(final_ds)
     return final_ds
 
+
 def timeseries_ds_formation(ds: Dict[str, np.ndarray], episode_length: int, gap: int):
     final_ds = []
     # Calculate the distances
@@ -147,8 +175,10 @@ def timeseries_ds_formation(ds: Dict[str, np.ndarray], episode_length: int, gap:
     for k, v in ds.items():
         for h in range(ceil(v.shape[0] // hop_distance)):
             offset = hop_distance * h
-            logger.info(f"({k}: len({v.shape[0]})): Adding att offset {offset} to {offset+episode_length}")
-            rollout = v[offset:offset+episode_length, :]
+            logger.info(
+                f"({k}: len({v.shape[0]})): Adding att offset {offset} to {offset+episode_length}"
+            )
+            rollout = v[offset : offset + episode_length, :]
             if rollout.shape[0] != episode_length:
                 continue
             rollouts.append(rollout)
@@ -172,15 +202,19 @@ def validation_data_organization(
         random_bucket = ds[random_bucket_key]
         bucket_length = len(random_bucket)
         random_position = np.random.randint(bucket_length - snapshot_length)
-        episodes.append(random_bucket[random_position : random_position + snapshot_length])
+        episodes.append(
+            random_bucket[random_position : random_position + snapshot_length]
+        )
 
     return episodes
+
 
 # TODO: Fix this. It is not working
 def validation_iteration(
     validation_episodes: torch.Tensor,
     idxs_colsToGuess: Sequence[int],
-    model: nn.Module,
+    model_vae: nn.Module,
+    model_adversary: nn.Module,
     save_path: str = "./figures/new_data_vae/plot_vaerecon_eval_{}.png",
 ) -> Dict[str, float]:
     """
@@ -194,22 +228,35 @@ def validation_iteration(
         "recon_loss": [],
         "adv_loss": [],
     }
-    model.eval()
+
+    model_vae.eval()
+    model_adversary.eval()
+
     if validation_episodes.shape[0] > 3:
-        raise ValueError("You may be using too many samples. Please reduce the number of samples")
+        raise ValueError(
+            "You may be using too many samples. Please reduce the number of samples"
+        )
 
-    cols_as_features = list(set((range(validation_episodes.shape[2]))) - set(idxs_colsToGuess))
-    model_device = next(model.parameters()).device
-    val_x = validation_episodes[:, :, cols_as_features].to(torch.float32).to(model_device)
-    val_y = validation_episodes[:, :, idxs_colsToGuess].to(torch.float32).to(model_device)
+    cols_as_features = list(
+        set((range(validation_episodes.shape[2]))) - set(idxs_colsToGuess)
+    )
+    model_device = next(model_vae.parameters()).device
+    val_x = (
+        validation_episodes[:, :, cols_as_features].to(torch.float32).to(model_device)
+    )
 
-    fig,axs = plt.subplots(val_x.shape[0],2,figsize=(16, 10), dpi=300)
-    plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1, hspace=0.5, wspace=0.5)
+    fig, axs = plt.subplots(val_x.shape[0], 2, figsize=(16, 10), dpi=200)
+    plt.subplots_adjust(
+        left=0.1, right=0.9, top=0.9, bottom=0.1, hspace=0.5, wspace=0.5
+    )
     plt.tight_layout()
     plt.title("Validation Data")
-    features_to_check = [5]
 
-    sanitized_data, guessed_features, _ = model(val_x)
+    latent_z, sanitized_data, kl_divergence = model_vae(val_x)
+
+    # TODO: Incorporate Adversary Guess
+    adversary_guess_flat = model_adversary(latent_z)
+    adversary_guess = adversary_guess_flat.view(val_x.shape[0], -1)
     non_sanitized_data = val_x
 
     # Old stuff for reference
@@ -217,9 +264,6 @@ def validation_iteration(
 
         # These two vectors are of shape (1, sequence_length, num_features)
         # We want features to be in the same plot, and differerent sequences in differnt plots
-        all_data = torch.cat([non_sanitized_data[e, :, :], sanitized_data[e, :, :]])
-        min = torch.min(all_data)
-        max = torch.max(all_data)
         axs[e, 0].plot(
             non_sanitized_data[e, :, 6].squeeze().detach().cpu().numpy(),
             label=f"True $f_{e}$",
@@ -230,11 +274,10 @@ def validation_iteration(
             label=f"True $f_{e}$",
         )
         axs[e, 1].set_title(f"Sanitized episode  {e}")
-        # Now set Y_scale
-        # axs[e,0].set_ylim(min.item(), max.item())
-        # axs[e,1].set_ylim(min.item(), max.item())
 
-        recon_loss = F.mse_loss(sanitized_data[e,:,:], non_sanitized_data[e,:,:], reduction='mean')
+        recon_loss = F.mse_loss(
+            sanitized_data[e, :, :], non_sanitized_data[e, :, :], reduction="mean"
+        )
         logger.debug(f"The mean loss for this episode was: {recon_loss.item()}")
         # adv_loss = F.mse_loss(model(sanitized_data), episode_y)
         metrics["recon_loss"].append(recon_loss.mean().item())
@@ -244,7 +287,8 @@ def validation_iteration(
     plt.savefig(save_path, bbox_inches="tight", pad_inches=0.1)
     plt.close()
 
-    model.train()
+    model_vae.train()
+    model_adversary.train()
 
     return {k: np.mean(v).item() for k, v in metrics.items()}
 
@@ -254,6 +298,7 @@ def compare_reconstruction():
     Will take the original set of features and
     """
     raise NotImplementedError
+
 
 # TODO: Later change the name of the function
 def train_v0(
@@ -266,121 +311,14 @@ def train_v0(
     episode_gap: int,
     episode_length: int,
     epochs: int,
-    model_vae_adversary: SeqAdversarialVAE,
-    learning_rate: float,
-    # Some Extra Params
-    saveplot_dest: str,
-):
-    feature_columns = list(set(range(len(data_columns))) - set(columns_to_hide))
-    opt_vae = torch.optim.Adam(model_vae_adversary.parameters(), lr=learning_rate) # type: ignore
-
-    device = next(model_vae_adversary.parameters()).device
-    # assert (
-    #     device == next(model_adversary.parameters()).device
-    # ), "DThe device of the VAE and the adversary should be the same"
-
-    all_train_data = timeseries_ds_formation(ds_train, episode_length, episode_gap)
-    train_x = all_train_data[:, :, feature_columns]
-    train_y = all_train_data[:, :, columns_to_hide]
-    sequence_length = train_x.shape[1]
-    num_priv_cols = train_y.shape[2]
-
-    # Similarly for the validation
-    # all_val_data = indiscriminate_supervision(ds_val)
-    # val_x = all_val_data[:, columns_to_share]
-    # val_y = all_val_data[:, columns_to_hide]
-    # Validation data will not be shuffled since we vant to visualize the results in time series
-
-    # TODO: Original Data for Validataion
-    validation_episodes_list: List[np.ndarray] = validation_data_organization(
-        ds_train, snapshot_length=episode_length, num_episodes=3
-    )
-    validation_episodes_tensor =  torch.from_numpy(np.stack(validation_episodes_list)).to(device)
-
-    num_batches = train_x.shape[0] // batch_size
-    logger.info(f"Working with {train_x.shape[0]} samples")
-    recon_losses = []
-    d_sanitized_dist = []
-    for e in range(epochs):
-        logger.info(f"Epoch {e} of {epochs}")
-        # losses_for_dist = []
-        adversary_losses_batch = []
-        for b in range(num_batches):
-            # Now Get the new VAE generations
-            model_vae_adversary.zero_grad()
-            batch_x = torch.from_numpy(train_x[b * batch_size : (b + 1) * batch_size]).to(torch.float32).to(device)
-            batch_y = torch.from_numpy(train_y[b * batch_size : (b + 1) * batch_size]).to(torch.float32).to(device)
-            recon_data = batch_x.clone().requires_grad_(False)
-            if batch_x.shape[0] != batch_size:
-                continue
-            logger.info(f"Batch {b} of {num_batches} with shape {batch_x.shape}")
-
-            # Get the adversary to guess the sensitive column
-            sanitized_data, adversary_guess_flat, kl_divergence = model_vae_adversary(batch_x)
-
-            # logger.info(f"batch_x sum is {batch_x.sum()}")
-            # plt.hist(batch_x.flatten().detach().cpu().numpy(), bins=100)
-            # plt.title(f"Training Sanitized Episode Input Dist {e}")
-            # plt.show()
-
-            # This should be it
-            recon_loss = F.mse_loss(sanitized_data, recon_data, reduction="none")
-            batch_y_flat = batch_y.view(-1,batch_y.shape[-1])
-            adv_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
-            # losses_for_dist.append(recon_loss.view(-1).tolist())
-            loss = (recon_loss.mean(-1) - kl_divergence).mean()
-
-            # model_adversary.zero_grad()
-            # logger.info(f"Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
-            loss.backward()
-            recon_losses.append(recon_loss.mean().item())
-
-            opt_vae.step()
-            # logger.info(f"Epoch {e} Batch {b} Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
-
-            if b % 16 == 0:
-                save_path = f"./figures/new_data_vae/plot_vaerecon_eval_{e:02d}_{b:02d}.png"
-                metrics = validation_iteration(validation_episodes_tensor, columns_to_hide, model_vae_adversary, save_path)
-                logger.info(f"Validation Metrics are {metrics}")
-
-                # Plot the histogram of losses
-                # plt.hist(losses_for_dist, bins=100)
-                # plt.savefig(f"./figures/new_data_vae/plot_vaerecon_losses_{e:02d}_{b:02d}.png")
-
-                # meepo = sanitized_data.view(-1).tolist()
-                # plt.hist(meepo, bins=100)
-                # plt.savefig(f"./figures/new_data_vae/plot_vaerecon_losses_{e:02d}_{b:02d}.png")
-                # plt.close()
-
-    # Plot some old stuff
-    # Try to pllot some stuff just for the sake of debugging
-    # New plot
-    plt.plot(recon_losses)
-    plt.title("Reconstruction Loss")
-    # Save the plot
-    plt.show()
-
-    return model_vae_adversary
-
-def train_v1(
-    batch_size: int,
-    columns_to_hide: List[int],
-    data_columns: List[str],
-    device: torch.device,
-    ds_train: Dict[str, np.ndarray],
-    ds_val: Dict[str, np.ndarray],
-    episode_gap: int,
-    episode_length: int,
-    epochs: int,
-    model_vae: SeqAdversarialVAE,
-    model_adversary: Adversary,
+    model_vae_adversary: SequentialVAE,
     learning_rate: float,
     kl_dig_hypr: float,
     # Some Extra Params
     saveplot_dest: str,
 ):
     feature_columns = list(set(range(len(data_columns))) - set(columns_to_hide))
-    opt_vae = torch.optim.Adam(model_vae_adversary.parameters(), lr=learning_rate) # type: ignore
+    opt_vae = torch.optim.Adam(model_vae_adversary.parameters(), lr=learning_rate)  # type: ignore
 
     device = next(model_vae_adversary.parameters()).device
     # assert (
@@ -403,7 +341,9 @@ def train_v1(
     validation_episodes_list: List[np.ndarray] = validation_data_organization(
         ds_train, snapshot_length=episode_length, num_episodes=3
     )
-    validation_episodes_tensor =  torch.from_numpy(np.stack(validation_episodes_list)).to(device)
+    validation_episodes_tensor = torch.from_numpy(
+        np.stack(validation_episodes_list)
+    ).to(device)
 
     num_batches = train_x.shape[0] // batch_size
     logger.info(f"Working with {train_x.shape[0]} samples")
@@ -417,15 +357,25 @@ def train_v1(
         for b in range(num_batches):
             # Now Get the new VAE generations
             model_vae_adversary.zero_grad()
-            batch_x = torch.from_numpy(train_x[b * batch_size : (b + 1) * batch_size]).to(torch.float32).to(device)
-            batch_y = torch.from_numpy(train_y[b * batch_size : (b + 1) * batch_size]).to(torch.float32).to(device)
+            batch_x = (
+                torch.from_numpy(train_x[b * batch_size : (b + 1) * batch_size])
+                .to(torch.float32)
+                .to(device)
+            )
+            batch_y = (
+                torch.from_numpy(train_y[b * batch_size : (b + 1) * batch_size])
+                .to(torch.float32)
+                .to(device)
+            )
             recon_data = batch_x.clone().requires_grad_(False)
             if batch_x.shape[0] != batch_size:
                 continue
             logger.info(f"Batch {b} of {num_batches} with shape {batch_x.shape}")
 
             # Get the adversary to guess the sensitive column
-            sanitized_data, adversary_guess_flat, kl_divergence = model_vae_adversary(batch_x)
+            sanitized_data, adversary_guess_flat, kl_divergence = model_vae_adversary(
+                batch_x
+            )
 
             # logger.info(f"batch_x sum is {batch_x.sum()}")
             # plt.hist(batch_x.flatten().detach().cpu().numpy(), bins=100)
@@ -434,10 +384,14 @@ def train_v1(
 
             # This should be it
             recon_loss = F.mse_loss(sanitized_data, recon_data, reduction="none")
-            batch_y_flat = batch_y.view(-1,batch_y.shape[-1])
+            batch_y_flat = batch_y.view(-1, batch_y.shape[-1])
             adv_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
             # losses_for_dist.append(recon_loss.view(-1).tolist())
-            loss = (recon_loss.mean(-1) + torch.log(1/(1.0e-10 + adv_loss)) - kl_dig_hypr * kl_divergence).mean()
+            loss = (
+                recon_loss.mean(-1)
+                + torch.log(1 / (1.0e-10 + adv_loss))
+                - kl_dig_hypr * kl_divergence
+            ).mean()
 
             # model_adversary.zero_grad()
             # logger.info(f"Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
@@ -449,8 +403,15 @@ def train_v1(
             # logger.info(f"Epoch {e} Batch {b} Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
 
             if b % 16 == 0:
-                save_path = f"./figures/new_data_vae/plot_vaerecon_eval_{e:02d}_{b:02d}.png"
-                metrics = validation_iteration(validation_episodes_tensor, columns_to_hide, model_vae_adversary, save_path)
+                save_path = (
+                    f"./figures/new_data_vae/plot_vaerecon_eval_{e:02d}_{b:02d}.png"
+                )
+                metrics = validation_iteration(
+                    validation_episodes_tensor,
+                    columns_to_hide,
+                    model_vae_adversary,
+                    save_path,
+                )
                 logger.info(f"Validation Metrics are {metrics}")
 
                 # Plot the histogram of losses
@@ -474,6 +435,159 @@ def train_v1(
 
     return model_vae_adversary
 
+
+def train_v1(
+    batch_size: int,
+    columns_to_hide: List[int],
+    data_columns: List[str],
+    device: torch.device,
+    ds_train: Dict[str, np.ndarray],
+    ds_val: Dict[str, np.ndarray],
+    episode_gap: int,
+    episode_length: int,
+    epochs: int,
+    model_vae: SequentialVAE,
+    model_adversary: Adversary,
+    learning_rate: float,
+    kl_dig_hypr: float,
+    # Some Extra Params
+    saveplot_dest: str,
+):
+    feature_columns = list(set(range(len(data_columns))) - set(columns_to_hide))
+    opt_adversary = torch.optim.Adam(model_adversary.parameters(), lr=learning_rate)  # type: ignore
+    opt_vae = torch.optim.Adam(model_vae.parameters(), lr=learning_rate)  # type: ignore
+
+    device = next(model_vae.parameters()).device
+    # assert (
+    #     device == next(model_adversary.parameters()).device
+    # ), "DThe device of the VAE and the adversary should be the same"
+
+    all_train_data = timeseries_ds_formation(ds_train, episode_length, episode_gap)
+    train_pub = all_train_data[:, :, feature_columns]
+    train_priv = all_train_data[:, :, columns_to_hide]
+    sequence_length = train_pub.shape[1]
+    num_priv_cols = train_priv.shape[2]
+
+    # Similarly for the validation
+    # all_val_data = indiscriminate_supervision(ds_val)
+    # val_x = all_val_data[:, columns_to_share]
+    # val_y = all_val_data[:, columns_to_hide]
+    # Validation data will not be shuffled since we vant to visualize the results in time series
+
+    validation_episodes_list: List[np.ndarray] = validation_data_organization(
+        ds_train, snapshot_length=episode_length, num_episodes=3
+    )
+    validation_episodes_tensor = torch.from_numpy(
+        np.stack(validation_episodes_list)
+    ).to(device)
+
+    num_batches = train_pub.shape[0] // batch_size
+    logger.info(f"Working with {train_pub.shape[0]} samples")
+    recon_losses = []
+    adv_losses = []
+    d_sanitized_dist = []
+    for e in range(epochs):
+        logger.info(f"Epoch {e} of {epochs}")
+        # losses_for_dist = []
+        adversary_losses_batch = []
+        for b in range(num_batches):
+            # Now Get the new VAE generations
+            batch_pub = (
+                torch.from_numpy(train_pub[b * batch_size : (b + 1) * batch_size])
+                .to(torch.float32)
+                .to(device)
+            )
+            batch_priv = (
+                torch.from_numpy(train_priv[b * batch_size : (b + 1) * batch_size])
+                .to(torch.float32)
+                .to(device)
+            )
+            recon_data = batch_pub.clone().requires_grad_(False)
+            if batch_pub.shape[0] != batch_size:
+                continue
+            logger.info(f"Batch {b} of {num_batches} with shape {batch_pub.shape}")
+
+            ########################################
+            # 1. Get the adversary to guess the sensitive column
+            ########################################
+            for param in model_adversary.parameters():
+                param.requires_grad = True
+            for param in model_vae.parameters():
+                param.requires_grad = False
+
+            # Get the latent features and sanitized data
+            latent_z, sanitized_data, kl_divergence = model_vae(batch_pub)
+
+            # Take Latent Features and Get Adversary Guess
+            adversary_guess_flat = model_adversary(latent_z)
+
+            # Check on performance
+            batch_y_flat = batch_priv.view(-1, batch_priv.shape[-1])
+            adv_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
+            model_adversary.zero_grad()
+            adv_loss.backward()
+            opt_adversary.step()
+
+            ########################################
+            # 2. Calculate the Recon Loss
+            ########################################
+            for param in model_adversary.parameters():
+                param.requires_grad = False
+            for param in model_vae.parameters():
+                param.requires_grad = True
+
+            # Get the latent features and sanitized data
+            latent_z, sanitized_data, kl_divergence = model_vae(batch_pub)
+
+            # Take Latent Features and Get Adversary Guess
+            adversary_guess_flat = model_adversary(latent_z)
+            # Check on performance
+            batch_y_flat = batch_priv.view(-1, batch_priv.shape[-1])
+            pub_recon_loss = F.mse_loss(sanitized_data, batch_pub, reduction="none")
+            adv_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
+            final_loss = pub_recon_loss.mean(-1) - 1.0 * adv_loss
+            final_loss_scalar = final_loss.mean()
+
+            model_vae.zero_grad()
+            final_loss_scalar.backward()
+            opt_vae.step()
+            # logger.info(f"Epoch {e} Batch {b} Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
+
+            if b % 16 == 0:
+                save_path = (
+                    f"./figures/new_data_vae/plot_vaerecon_eval_{e:02d}_{b:02d}.png"
+                )
+                metrics = validation_iteration(
+                    validation_episodes_tensor,
+                    columns_to_hide,
+                    model_vae,
+                    model_adversary,
+                    save_path,
+                )
+                logger.info(f"Validation Metrics are {metrics}")
+
+                # Plot the histogram of losses
+                # plt.hist(losses_for_dist, bins=100)
+                # plt.savefig(f"./figures/new_data_vae/plot_vaerecon_losses_{e:02d}_{b:02d}.png")
+
+                # meepo = sanitized_data.view(-1).tolist()
+                # plt.hist(meepo, bins=100)
+                # plt.savefig(f"./figures/new_data_vae/plot_vaerecon_losses_{e:02d}_{b:02d}.png")
+                # plt.close()
+
+    fig, axs = plt.subplots(1, 2)
+    axs[0].plot(recon_losses)
+    axs[0].set_title("Reconstruction Loss")
+    axs[1].plot(adv_losses)
+    axs[1].set_title("Adversary Loss")
+
+    plt.savefig(f"./figures/new_data_vae/recon-adv_losses.png")
+
+    plt.close()
+
+    return model_adversary
+
+
 # TODO: We need to implement federated learning in this particular part of the expression
 def federated():
     # We also need a federated aspect to all this. And its getting close to being time to implementing this
@@ -495,7 +609,7 @@ def train_adversary_iteration(
     adversary.train()
     criterion = nn.MSELoss()
     # FIX: Remove the hyperparameters
-    optimizer = torch.optim.Adam(adversary.parameters(), lr=0.01) # type: ignore
+    optimizer = torch.optim.Adam(adversary.parameters(), lr=0.01)  # type: ignore
 
     # Once this is just regression
     for e in range(epochs):
@@ -539,7 +653,7 @@ def main():
     # TODO: Make it  so that generate_dataset checks if params are the same
     columns, runs_dict = load_defacto_data(args.defacto_data_raw_path)
 
-    # Separate them into their splits (and also interpolate) 
+    # Separate them into their splits (and also interpolate)
     train_runs, val_runs, test_runs = split_defacto_runs(
         runs_dict,
         **args.splits,
@@ -550,7 +664,7 @@ def main():
     # Get Informaiton for the VAE
     vae_dimension = len(columns) - len(args.cols_to_hide)
     # TODO: Get the model going
-    model_vae = SeqAdversarialVAE(
+    model_vae = SequentialVAE(
         # inout_size for model is output_dim for data
         input_size=vae_dimension,
         latent_size=args.vae_latent_size,
@@ -559,11 +673,11 @@ def main():
         rnn_num_layers=args.rnn_num_layers,
     ).to(device)
 
-    model_discriminator = Adversary(
-        input_size=vae_dimension,
+    model_adversary = Adversary(
+        input_size=args.vae_latent_size,
         hidden_size=args.vae_hidden_size,
         num_classes=1,
-    )
+    ).to(device)
 
     logger.debug(f"Columns are {columns}")
     logger.debug(f"Runs dict is {runs_dict}")
@@ -601,8 +715,10 @@ def main():
     #     args.epochs,
     #     args.saveplot_dest,
     #     [true,false,True]
-   # )
-    #
+
+
+# )
+#
 if __name__ == "__main__":
     logger = create_logger("main_vae")
     main()
