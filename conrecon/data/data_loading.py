@@ -135,7 +135,7 @@ def split_defacto_runs(
 
     return train_ds, val_ds, test_ds
 
-def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray]]:
+def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray], pd.DataFrame]:
     """
     Load the data from the defacto dataset
 
@@ -158,11 +158,15 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
             files.append(ff)
 
     # Organize them by number after the run_
+    debug_file = files[-1]
+    debug_file = pd.read_csv(os.path.join(path,debug_file), index_col=0,header=0)
+    files = files[:-1]
     sorted_files = sorted(files, key=lambda x: int(x.split(".")[0].split("run_")[1]))
     obtained_runs = OrderedDict({ f_name : np.ndarray([]) for f_name in sorted_files })
 
-    # Now lets show it
+    # Debug: Leave one out and see where things are going.
 
+    # Now we start forming a 
     for f in sorted_files:
         print(f"Loading run: run {f}")
         df = pd.read_csv(os.path.join(path,f), index_col=0, header=0)
@@ -171,8 +175,9 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
         df.dropna(inplace=True)
         obtained_runs[f] = df.values # NOTE: Confirm this doing what we expect it to 
 
+    assert isinstance(debug_file, pd.DataFrame)
     # Let me see how it looks
-    return columns_so_far, obtained_runs
+    return columns_so_far, obtained_runs, debug_file
 
 
 def new_format(path: str, features_per_run: int = 15):

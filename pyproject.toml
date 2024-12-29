@@ -30,6 +30,7 @@ scikit-learn = "^1.5.2"
 pyqt5 = "^5.15.11"
 pyqt6 = "^6.7.1"
 debugpy = "^1.8.11"
+sktime = "^0.35.0"
 
 [build-system]
 requires = ["poetry-core"]

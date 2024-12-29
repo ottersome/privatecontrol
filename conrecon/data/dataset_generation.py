@@ -1,6 +1,6 @@
 from ..utils import create_logger
 from ..ss_generation import SSParam
-from typing import Tuple
+from typing import Dict, Tuple
 import os
 import pickle
 import pandas as pd
@@ -154,3 +154,89 @@ def gen_n_sims(
         system_outputs[i, :, :] = obs
 
     return hidden_truths, system_outputs
+
+
+def batch_generation_randUni(
+    ds: Dict[str,np.ndarray],
+    sequence_len: int,
+    padding_value: int = -1,
+    oversample_coefficient = 1.2, 
+    leave_final_file: bool = True
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Will sample uniform at random across the time windows.
+    Will add batching when necessary
+    """
+    last_key = list(ds.keys())[-1] # debug
+    rollouts = []
+    for k,v in ds.items():
+        if leave_final_file and k == last_key:
+            continue # ignore last file
+        run_size = v.shape[0]
+        num_sample_sequences = int(oversample_coefficient * (run_size // sequence_len))
+        
+        random_spots = np.random.randint(0, run_size, num_sample_sequences)
+        for rs in random_spots:
+            history = spot_backhistory(rs, sequence_len, v, padding_value)
+            rollouts.append(history)
+
+    rollouts = np.stack(rollouts, axis=0)
+    np.random.shuffle(rollouts)
+
+    # DEBUG: 
+    validation_episode = np.array([])
+    if leave_final_file:
+        validation_episode = ds[last_key]
+
+    return rollouts, validation_episode
+
+def spot_backhistory(spot: int, sequence_len: int, run: np.ndarray, padding_value: int):
+    """
+    Args:
+        spot: where the sampling will start from.
+        sequence_len:  includes `spot` as part of the sequence length
+    """
+    sequence_so_far = run[: spot + 1, :]  # Inclusive
+    sequence_so_far = sequence_so_far[-sequence_len:, :]
+    if (spot - sequence_len + 1) < 0:
+        # Then we have to add padding:
+        padding_amnt = sequence_len - sequence_so_far.shape[0]
+        padding = np.full((padding_amnt, sequence_so_far.shape[1]), padding_value)
+        final_sequence = np.concat(
+            [
+                padding,
+                sequence_so_far,
+            ],
+            axis=0,
+        )
+    else:
+        final_sequence = sequence_so_far
+
+    return final_sequence
+
+def spot_shuanghistory():
+    pass
+                        
+
+def timeseries_ds_formation(ds: Dict[str, np.ndarray], episode_length: int, gap: int):
+    final_ds = []
+    # Calculate the distances
+    hop_distance = episode_length - gap
+
+    rollouts = []
+    for k, v in ds.items():
+        for h in range(ceil(v.shape[0] // hop_distance)):
+            offset = hop_distance * h
+            logger.info(
+                f"({k}: len({v.shape[0]})): Adding att offset {offset} to {offset+episode_length}"
+            )
+            rollout = v[offset : offset + episode_length, :]
+            if rollout.shape[0] != episode_length:
+                continue
+            rollouts.append(rollout)
+
+    # Shuffle it around
+    rollouts = np.stack(rollouts, axis=0)
+    # TODO: Check that the shuffling is being done right
+    np.random.shuffle(rollouts)
+    return rollouts
