@@ -446,3 +446,92 @@ class RecurrentVAE(nn.Module):
         # We have the resulting mu and sigma for the sequence to regenerate.
         z = self.reparameterize(mu, sigma)
         return self.decode(z)
+
+class SequenceToScalarVAE(nn.Module):
+
+    # ADVERSARY_SOURCE = "DECODED" # For taking decoded output
+    ADVERSARY_SOURCE = "LATENT" # For using latent features
+
+    def __init__(
+        self,
+        input_size: int,
+        latent_size: int,
+        hidden_size: int,
+        num_features_to_guess: int,
+        rnn_num_layers: int = 1,
+        rnn_hidden_size: int = 32,
+    ):
+        super(SequenceToScalarVAE, self).__init__()
+
+        # This one will have a RNN For encodeing the state data
+        self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
+        self.path_encoder = nn.LSTM(
+            input_size=input_size,
+            hidden_size=rnn_hidden_size,
+            num_layers=rnn_num_layers,
+            batch_first=True,
+        )
+        # Once we have the path encoder 
+
+        self.input_size = input_size
+        self.latent_size = latent_size
+        self.hidden_size = hidden_size
+        self.fc1 = nn.Linear(rnn_hidden_size, hidden_size)
+        self.fc21 = nn.Linear(hidden_size, latent_size)
+        self.fc22 = nn.Linear(hidden_size, latent_size)
+        self.fc3 = nn.Linear(latent_size, hidden_size)
+        self.fc4 = nn.Linear(hidden_size, input_size)
+        self.logger = create_logger(__class__.__name__)
+
+        self.relu = nn.ReLU()
+
+        # Start with normal Normal distribution
+        self.N = Normal(0, 1)
+
+    def encode(self, x):
+        # This normally expects (batch_size, sequence_length, input_size)
+        if len(x.shape) == 3:
+            reshaped_x = x.reshape(-1, x.shape[-1])
+        elif len(x.shape) == 2:
+            reshaped_x = x
+        else:
+            raise ValueError(f"Shape of x is {x.shape} and its type is {type(x)}")
+
+        # Keep x i
+        self.logger.debug(f"Shape of x is {x.shape} and its type is {type(x)}")
+        h1 = F.relu(self.fc1(reshaped_x))
+        return self.fc21(h1), self.fc22(h1)
+
+    def reparameterize(self, mu, logvar) -> torch.Tensor:
+        # d0 = sigma * self.N.sample(mu.shape).to(sigma.device)
+        # z = mu + d0
+        std = torch.exp(0.5*logvar)
+        eps = torch.randn_like(std)
+        z = mu + eps*std
+        return z
+
+    def decode(self, z):
+        h3 = F.relu(self.fc3(z))
+        return self.fc4(h3)
+
+    def forward(self, x):
+        """
+        Args:
+            - x: The input data (batch_size, sequence_length, input_size)
+        Returns:
+            - z: The latent representation of the data
+            - decoded: The decoded data
+            - kl: The KL divergence between the posterior and prior (batch_size,)
+        """
+        rnn_output, (rnn_hn, rnn_cn)  = self.path_encoder(x)
+        rnn_output = rnn_output[:, -1, :] # Now (batch_size, 1, column_size)
+        # rnn_output_flat = rnn_output.reshape(-1, rnn_output.shape[-1])
+        mu, logvar = self.encode(rnn_output)
+        z = self.reparameterize(mu, logvar)
+        var = torch.exp(logvar)
+        # kl = 0.5 * (torch.pow(sigma,2) + torch.pow(mu,2) - torch.log(torch.pow(sigma,2)) - 1)
+        kl = 0.5 * (var + torch.pow(mu,2) - logvar - 1).reshape(x.shape[0], x.shape[1], -1)
+        kl = kl.sum(dim=-1)
+        decoded = self.decode(z)
+
+        return z,decoded, kl

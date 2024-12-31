@@ -190,6 +190,35 @@ def batch_generation_randUni(
 
     return rollouts, validation_episode
 
+
+def collect_n_sequential_batches(
+    dataset: np.ndarray,
+    start_idx: int,
+    end_idx: int,
+    sequence_length: int,
+    padding_value: int,
+):
+    """
+    Will take a validation file and get sequential batches
+    Args:
+        - dataset: .shape = (file_num_rows, num_all_columsn)
+        - start_idx: Where to start
+        - end_idx: End (exclusive)
+        - padding_value: self-descriptive
+
+    """
+    rollouts = []
+    # Make a list out of the slice
+    for spot in range(start_idx, end_idx):
+        history = spot_backhistory(
+            spot, sequence_length, dataset, padding_value
+        )
+        rollouts.append(history)
+    rollouts = np.stack(rollouts, axis=0)
+    return rollouts
+    
+
+
 def spot_backhistory(spot: int, sequence_len: int, run: np.ndarray, padding_value: int):
     """
     Args:
