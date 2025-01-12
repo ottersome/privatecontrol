@@ -478,6 +478,18 @@ def set_all_seeds(seed: int):
     np.random.seed(seed)
     torch.manual_seed(seed)
 
+def trivial_correlation_baseline(test_runs: OrderedDict[str, np.ndarray], pretrained_adversary: nn.Module):
+    """
+    Will try to remove a column and simply try to predeict it out of the other ones. 
+    """
+    pass
+
+
+def kosambi_karhunen_loeve_baseline(test_runs: OrderedDict[str, np.ndarray], pretrained_adversary: nn.Module):
+    """
+    Kosambi Karhunen Loeve baseline
+    """
+    pass
 
 def main():
     args = argsies()
@@ -553,6 +565,9 @@ def main():
     ########################################
     # Benchmarks
     ########################################
+    trivial_correlation_baseline(test_runs, model_adversary) 
+
+    kd_transform_baseline(test_runs, model_adversary)
 
     # 🚩 development so far🚩
     exit()
