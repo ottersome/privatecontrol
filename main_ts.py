@@ -92,6 +92,11 @@ def argsies() -> argparse.Namespace:
         type=int,
         help="Port to attach debugpy to listen to.",
     )
+    ap.add_argument(
+        "--shuffle",
+        action="store_false",
+        help="Whether or not to shuffle the data",
+    )
 
     args = ap.parse_args()
 
@@ -187,7 +192,7 @@ def validation_data_organization(
 
     return episodes
 
-def validate_entire_file(
+def test_entire_file(
     validation_file: np.ndarray,
     idxs_colsToGuess: Sequence[int],
     model_vae: nn.Module,
@@ -323,6 +328,7 @@ def train_v1(
 ) -> Tuple[nn.Module, nn.Module, List, List]:
     """
     Training Loop
+        ds_train: np.ndarray (num_batches, batch_size, features),
     """
 
     feature_columns = list(set(range(len(data_columns))) - set(columns_to_hide))
@@ -332,7 +338,6 @@ def train_v1(
     device = next(model_vae.parameters()).device
 
     # all_train_data = timeseries_ds_formation(ds_train, sequence_length, episode_gap)
-    all_train_data, validation_sequence = batch_generation_randUni(ds_train, sequence_length, -1, 1.2)
     # Returns (num_rolluts, sequence_length, num_columns)
     train_pub = all_train_data[:, :, feature_columns]
     train_priv = all_train_data[:, :, columns_to_hide]
@@ -410,20 +415,9 @@ def train_v1(
             # logger.info(f"Epoch {e} Batch {b} Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
 
             if b % 16 == 0:
-                save_path = (
-                    f"./figures/new_data_vae/plot_vaerecon_eval_{e:02d}_{b:02d}.png"
-                )
-                metrics = validate_entire_file(
-                    validation_sequence,
-                    columns_to_hide,
-                    model_vae,
-                    model_adversary,
-                    sequence_length,
-                    debug_file,
-                    padding_value,
-                    save_path,
-                )
-                logger.info(f"Validation Metrics are {metrics}")
+                # TODO: Finish the validation implementaion with correlation
+                # - Log the validation metrics here
+                validation_metrics(ds_val)
 
     return model_vae, model_adversary, recon_losses, adv_losses
 
@@ -432,6 +426,31 @@ def train_v1(
 def federated():
     # We also need a federated aspect to all this. And its getting close to being time to implementing this
     raise NotImplementedError
+
+
+def validation_metrics(all_features: np.ndarray, pub_features_idxs: List[int], adversary: nn.Module):
+    """
+    We use correlation here as our delta-epsilon metric.
+    """
+
+    # TODO: Implement batching
+
+    priv_features_idxs  = list(set(range(len(all_features))) - set(pub_features_idxs))
+
+    priv_features = all_features[:, priv_features_idxs]
+    pub_features = all_features[:, pub_features_idxs]
+
+    complete_reconstruction = adversary(priv_features)
+
+    recon_pub = complete_reconstruction[:, pub_features_idxs]
+    recon_priv = complete_reconstruction[:, priv_features_idxs]
+
+    # Now we calculate the correlation
+    corr_pub = np.corrcoef(pub_features.flatten(), recon_pub.flatten())[0, 1]
+    corr_priv = np.corrcoef(priv_features.flatten(), recon_priv.flatten())[0, 1]
+
+    return corr_pub, corr_priv
+
 
 
 # This ought to be ran iterarively witht the encoder so that this also learns to better extract from the new encoder version
@@ -508,9 +527,11 @@ def main():
     num_private_cols = len(args.cols_to_hide)
 
     # Separate them into their splits (and also interpolate)
-    train_runs, val_runs, test_runs = split_defacto_runs(
+    train_runs, val_runs, test_run = split_defacto_runs(
         runs_dict,
-        **args.splits,
+        args.splits["train_split"],
+        args.splits["val_split"],
+        args.batch_size,
     )
 
     logger.info(f"Using device is {device}")
@@ -561,6 +582,22 @@ def main():
         args.padding_value,
     )
     plot_training_losses(recon_losses, adv_losses)
+
+    # TODO: Move this to a test 
+    save_path = (
+        f"./figures/new_data_vae/plot_vaerecon_eval_{e:02d}_{b:02d}.png"
+    )
+    metrics = test_entire_file(
+        validation_sequence,
+        columns_to_hide,
+        model_vae,
+        model_adversary,
+        sequence_length,
+        debug_file,
+        padding_value,
+        save_path,
+    )
+    logger.info(f"Validation Metrics are {metrics}")
 
     ########################################
     # Benchmarks

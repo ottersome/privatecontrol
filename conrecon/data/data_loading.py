@@ -8,6 +8,7 @@ from typing import Tuple
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
+import re
 
 def load_runs(path: str) -> OrderedDict[str, pd.DataFrame]:
     """
@@ -82,58 +83,93 @@ def split_run(run: np.ndarray, split_percentage: List[float]) -> Tuple[np.ndarra
         run[int(len(run) * (split_percentage[0] + split_percentage[1])) :],
     )
 
+def randomly_split_batched_run(run: np.ndarray, split_percentage: List[float], batch_size: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Will split a run into train, validation and test
+    Returns: in Order: Train, Validation, Test
+    """
+    assert sum(split_percentage) == 1, "Split Percentages should sum to 1"
+    assert len(split_percentage) == 3, "There should be three split_percentages"
+
+    run_length = run.shape[0]
+    num_batches = run_length // batch_size
+
+    # This will now selet them at random to have a better approach to it.
+    batches_offsets_idxs = np.arange(0,run_length, batch_size)
+
+    # Check if last offset is big enough otherwise we drop
+    if (run_length-1)-batches_offsets_idxs[-1] != batch_size:
+        batches_offsets_idxs = batches_offsets_idxs[:-1]
+
+    # Now we shuffle the offsets
+    np.random.shuffle(batches_offsets_idxs)
+
+    train_batches = batches_offsets_idxs[:int(num_batches * split_percentage[0])]
+    val_batches = batches_offsets_idxs[int(num_batches * split_percentage[0]) : int(num_batches * split_percentage[0] + num_batches * split_percentage[1])]
+    # Ignore test batches for now...
+
+    # Now we pick the actual batches into a 3d array
+    train_batches   = [run[i:i+batch_size] for i in train_batches]
+    val_batches     = [run[i:i+batch_size] for i in val_batches]
+
+    train_batches = np.stack(train_batches)
+    val_batches   = np.stack(val_batches)
+
+    return train_batches, val_batches, np.array([])
+
 
 def split_defacto_runs(
     run_dict: OrderedDict[str, np.ndarray], 
     train_split: float,
     val_split: float,
-    test_split: float,
-) -> Tuple[OrderedDict[str, np.ndarray], OrderedDict[str, np.ndarray], OrderedDict[str, np.ndarray]]:
+    batch_size: int,
+    scale: bool = True,
+) -> Tuple[OrderedDict[str, np.ndarray], OrderedDict[str, np.ndarray], np.ndarray]:
     """
     Will basically split the output of load_defacto_data into train, validation and test
     Every run will be split into train, validation and test
+    Test split will be an entirely different file
     """
-    d_img_path = './imgs/'
+
+    # Ensure test_split + val_split = 1
+    if abs((train_split + val_split) - 1) > 0.001:
+        raise RuntimeError(f"train_split ({train_split}) + val_split ({val_split} !~ 1)")
 
     train_ds = OrderedDict()
     val_ds = OrderedDict()
-    test_ds = OrderedDict()
-    split_percentages = [train_split, val_split, test_split]
-    # d_slices = [slice(0,128), slice(3,4)] # Sequence Length and features
-    # d_og_imgs = []
-    for run_name in run_dict.keys():
+
+    split_percentages = [train_split, val_split, 0]
+
+    # Order (perhaps not necessary run_dict)
+    sorted_run_dict = dict(
+        sorted(
+            run_dict.items(),
+            key=lambda x: int(re.search("(\d+)\.csv$", x[0]).group(1))
+        )
+    )
+
+    # Test DS will be returned as entire file as we might want the time order untouched
+    _, last_file = sorted_run_dict.popitem()
+
+    all_train = []
+    for run_name in sorted_run_dict.keys():
         run = run_dict[run_name]
-        # Split the run into train, validation and test
-        train_ds[run_name], val_ds[run_name], test_ds[run_name] = split_run(run, split_percentages)
+        train_ds[run_name], val_ds[run_name], _  = randomly_split_batched_run(run, split_percentages, batch_size)
+        all_train.append(train_ds[run_name])
+        all_train.append(val_ds[run_name])
 
-        # d_og_imgs.append(train_ds[run_name][d_slices[0],d_slices[1]])
+    all_train = np.concatenate(all_train)
+    all_train = all_train.reshape(-1, all_train.shape[2])
 
-    all_train = np.concat(list(train_ds.values()))
-    scaler = MinMaxScaler()
-    scaler.fit(all_train)
+    if scale: 
+        scaler = MinMaxScaler()
+        scaler.fit(all_train)
+        for run_name in run_dict:
+            train_ds[run_name] = scaler.transform(train_ds[run_name])
+            if len(val_ds[run_name]) > 0 :
+                val_ds[run_name] = scaler.transform(val_ds[run_name])
 
-    # d_sc_imgs = []
-    # TODO: Clean this bit of code if you can 
-    # Then normalized it. 
-    for run_name in run_dict:
-        train_ds[run_name] = scaler.transform(train_ds[run_name])
-        if len(val_ds[run_name]) > 0 :
-            val_ds[run_name] = scaler.transform(val_ds[run_name])
-        if len(test_ds[run_name]) > 0 :
-            test_ds[run_name] = scaler.transform(test_ds[run_name])
-
-        # d_sc_imgs.append(train_ds[run_name][d_slices[0], d_slices[1]])
-
-    # for i in range(len(d_sc_imgs)):
-    #     # Compare the paragraphs there. 
-    #     fig, axs = plt.subplots(1,2,figsize=(16,10))
-    #     plt.tight_layout()
-    #     # axis = np.concatenate(d_sc_imgs[i].shape[0]*[np.arange(d_og_imgs[i].shape[1])])
-    #     axs[0].plot(d_og_imgs[i],  label="Original Images")
-    #     axs[1].plot(d_sc_imgs[i],  label="New ones")
-    #     plt.show()
-
-    return train_ds, val_ds, test_ds
+    return train_ds, val_ds, last_file
 
 def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray], pd.DataFrame]:
     """
