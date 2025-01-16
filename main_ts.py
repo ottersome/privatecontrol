@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.live import Live
 from torch import nn
 from torch.nn import functional as F
+from tqdm import tqdm
 import pandas as pd
 
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
@@ -309,71 +310,65 @@ def plot_training_losses(recon_losses: List, adv_losses: List):
 
 def train_v1(
     batch_size: int,
-    columns_to_hide: List[int],
+    prv_columns: List[int],
     data_columns: List[str],
     device: torch.device,
     ds_train: Dict[str, np.ndarray],
     ds_val: Dict[str, np.ndarray],
-    episode_gap: int,
-    sequence_length: int,
     epochs: int,
     model_vae: SequenceToScalarVAE,
     model_adversary: Adversary,
     learning_rate: float,
     kl_dig_hypr: float,
-    # Some Extra Params
-    saveplot_dest: str,
-    debug_file: pd.DataFrame, # TOREM: I don't think we need this
-    padding_value: int,
 ) -> Tuple[nn.Module, nn.Module, List, List]:
     """
     Training Loop
         ds_train: np.ndarray (num_batches, batch_size, features),
     """
 
-    feature_columns = list(set(range(len(data_columns))) - set(columns_to_hide))
+    pub_columns = list(set(range(len(data_columns))) - set(prv_columns))
+    device = next(model_vae.parameters()).device
+
+    # Configuring Optimizers
     opt_adversary = torch.optim.Adam(model_adversary.parameters(), lr=learning_rate)  # type: ignore
     opt_vae = torch.optim.Adam(model_vae.parameters(), lr=learning_rate)  # type: ignore
 
-    device = next(model_vae.parameters()).device
+    ##  A bit of extra processing of data. (Specific to this version of training)
+    # Information comes packed in dictionary elements for each file. We need to mix it up a bit
+    all_train_seqs = np.concatenate([ seqs for _, seqs in ds_train.items()], axis=0)
+    all_valid_seqs = np.concatenate([ seqs for _, seqs in ds_val.items()], axis=0)
+    # Shuffle, Batch, Torch Coversion, Feature Separation
+    np.random.shuffle(all_train_seqs)
+    np.random.shuffle(all_valid_seqs)
+    batch_amnt  = all_train_seqs.shape[0] // batch_size
+    # all_train_seqs = all_train_seqs.reshape(batch_amnt, batch_size, all_train_seqs.shape[-2], all_train_seqs.shape[-1])
+    # all_valid_seqs = all_valid_seqs.reshape(batch_amnt, batch_size, all_valid_seqs.shape[-2], all_valid_seqs.shape[-1])
+    all_train_seqs = torch.from_numpy(all_train_seqs).to(torch.float32).to(device)
+    all_valid_seqs = torch.from_numpy(all_valid_seqs).to(torch.float32).to(device)
+    train_pub = all_train_seqs[:,:,pub_columns]
+    train_prv = all_train_seqs[:,:,prv_columns]
 
-    # all_train_data = timeseries_ds_formation(ds_train, sequence_length, episode_gap)
-    # Returns (num_rolluts, sequence_length, num_columns)
-    train_pub = all_train_data[:, :, feature_columns]
-    train_priv = all_train_data[:, :, columns_to_hide]
-    sequence_length = train_pub.shape[1]
-    num_priv_cols = train_priv.shape[2]
+    num_batches     = ceil(all_train_seqs.shape[0] / batch_size)
+    sequence_len    = all_train_seqs.shape[1]
 
     ########################################
     # Get Batches
     ########################################
-    num_batches = train_pub.shape[0] // batch_size
-    logger.info(f"Working with {train_pub.shape[0]} samples")
+    logger.info(f"Working with {num_batches} num_batches, each with size:  {batch_size}, and sequence/episode length {sequence_len}")
     recon_losses = []
     adv_losses = []
-    for e in range(epochs):
+    validation_metrics = []
+    for e in tqdm(range(epochs), desc="Epochs"):
         logger.info(f"Epoch {e} of {epochs}")
-        # losses_for_dist = []
-        for b in range(num_batches):
+        for batch_no in tqdm(range(num_batches), desc="Batches"):
             # Now Get the new VAE generations
-            batch_pub = (
-                torch.from_numpy(train_pub[b * batch_size : (b + 1) * batch_size])
-                .to(torch.float32)
-                .to(device)
-            )
-            batch_all = (
-                torch.from_numpy(all_train_data[b * batch_size : (b + 1) * batch_size])
-                .to(torch.float32)
-                .to(device)
-            )
-            batch_priv = (
-                torch.from_numpy(train_priv[b * batch_size : (b + 1) * batch_size, -1, :])
-                .to(torch.float32)
-                .to(device)
-            )
+            batch_all = all_train_seqs[batch_no * batch_size : (batch_no + 1) * batch_size]
+            batch_pub = train_pub[batch_no * batch_size : (batch_no + 1) * batch_size]
+            batch_prv = train_prv[batch_no * batch_size : (batch_no + 1) * batch_size]
             if batch_pub.shape[0] != batch_size:
                 continue
-            logger.info(f"Batch {b} of {num_batches} with shape {batch_pub.shape}")
+
+            logger.info(f"Batch {batch_no} out of {num_batches} with shape {batch_pub.shape}")
 
             ########################################
             # 1. Get the adversary to guess the sensitive column
@@ -385,7 +380,7 @@ def train_v1(
             adversary_guess_flat = model_adversary(latent_z)
 
             # Check on performance
-            batch_y_flat = batch_priv.view(-1, batch_priv.shape[-1])
+            batch_y_flat = batch_prv[:,-1,:].view(-1, batch_prv.shape[-1]) # Grab only last in sequeence
             adv_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
             model_adversary.zero_grad()
             adv_loss.backward()
@@ -401,8 +396,8 @@ def train_v1(
             # Take Latent Features and Get Adversary Guess
             adversary_guess_flat = model_adversary(latent_z)
             # Check on performance
-            batch_y_flat = batch_priv.view(-1, batch_priv.shape[-1])
-            pub_recon_loss = F.mse_loss(sanitized_data[:, feature_columns], pub_prediction)
+            batch_y_flat = batch_prv[:,-1,:].view(-1, batch_prv.shape[-1])
+            pub_recon_loss = F.mse_loss(sanitized_data[:, pub_columns], pub_prediction)
             adv_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
             final_loss_scalar = pub_recon_loss - 4.0 * adv_loss + kl_dig_hypr * kl_divergence.mean()
 
@@ -414,10 +409,21 @@ def train_v1(
             opt_vae.step()
             # logger.info(f"Epoch {e} Batch {b} Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
 
-            if b % 16 == 0:
+            if batch_no % 16 == 0:
                 # TODO: Finish the validation implementaion with correlation
                 # - Log the validation metrics here
-                validation_metrics(ds_val)
+                model_vae.eval()
+                model_adversary.eval()
+                with torch.no_grad():
+                    validation_metrics.append(
+                        calculate_validation_metrics(
+                            all_valid_seqs,
+                            pub_columns,
+                            prv_columns,
+                            model_vae,
+                            model_adversary,
+                        )
+                    )
 
     return model_vae, model_adversary, recon_losses, adv_losses
 
@@ -428,28 +434,33 @@ def federated():
     raise NotImplementedError
 
 
-def validation_metrics(all_features: np.ndarray, pub_features_idxs: List[int], adversary: nn.Module):
+def calculate_validation_metrics(
+    all_features: torch.Tensor,
+    pub_features_idxs: List[int],
+    prv_features_idxs: List[int],
+    model_vae: nn.Module,
+    model_adversary: nn.Module,
+):
     """
     We use correlation here as our delta-epsilon metric.
     """
+    prv_features = all_features[:, :, prv_features_idxs]
+    pub_features = all_features[:, :, pub_features_idxs]
 
-    # TODO: Implement batching
+    # Run data through models.
+    latent_z, sanitized_data, kl_divergence = model_vae(all_features)
+    recon_pub = sanitized_data[:, pub_features_idxs]
+    recon_priv = model_adversary(latent_z)
 
-    priv_features_idxs  = list(set(range(len(all_features))) - set(pub_features_idxs))
+    # Lets just do MSE for now
+    pub_mse = torch.mean((pub_features[:, -1, :] - recon_pub) ** 2)
+    prv_mse = torch.mean((prv_features[:, -1, :] - recon_priv) ** 2)
 
-    priv_features = all_features[:, priv_features_idxs]
-    pub_features = all_features[:, pub_features_idxs]
+    # TODO: Do torch equivalent so we can get the correlation coefficient of the sequences predcicted
+    # corr_pub = torch.corrcoef(pub_features[:, -1, :].flatten(), recon_pub.flatten())[0, 1]
+    # corr_prv = torch.corrcoef(prv_features[:, -1, :].flatten(), recon_priv.flatten())[0, 1]
 
-    complete_reconstruction = adversary(priv_features)
-
-    recon_pub = complete_reconstruction[:, pub_features_idxs]
-    recon_priv = complete_reconstruction[:, priv_features_idxs]
-
-    # Now we calculate the correlation
-    corr_pub = np.corrcoef(pub_features.flatten(), recon_pub.flatten())[0, 1]
-    corr_priv = np.corrcoef(priv_features.flatten(), recon_priv.flatten())[0, 1]
-
-    return corr_pub, corr_priv
+    return pub_mse, prv_mse
 
 
 
@@ -527,11 +538,12 @@ def main():
     num_private_cols = len(args.cols_to_hide)
 
     # Separate them into their splits (and also interpolate)
-    train_runs, val_runs, test_run = split_defacto_runs(
+    train_batches, val_batches, test_file = split_defacto_runs(
         runs_dict,
         args.splits["train_split"],
         args.splits["val_split"],
-        args.batch_size,
+        args.episode_length,
+        True, # Scale
     )
 
     logger.info(f"Using device is {device}")
@@ -560,41 +572,41 @@ def main():
     logger.debug(f"Columns are {columns}")
     logger.debug(f"Runs dict is {runs_dict}")
 
-    # With the Dataset in Place we Also Generate a Variational Autoencoder
-    # vae = train_VAE(outputs) # CHECK: Should we train this first or remove for later
+    ########################################
+    # Training
+    ########################################
     logger.info("Starting the VAE Training")
     model_vae, model_adversary, recon_losses, adv_losses = train_v1(
         args.batch_size,
         args.cols_to_hide,
         columns,
         device,
-        train_runs,
-        val_runs,
-        args.episode_gap,
-        args.episode_length,
+        train_batches,
+        val_batches,
         args.epochs,
         model_vae,
         model_adversary,
-        args.kl_dig_hypr,
         args.lr,
-        args.saveplot_dest,
-        debug_file,
-        args.padding_value,
+        args.kl_dig_hypr,
     )
-    plot_training_losses(recon_losses, adv_losses)
 
-    # TODO: Move this to a test 
+    ########################################
+    # Evaluation
+    ########################################
     save_path = (
         f"./figures/new_data_vae/plot_vaerecon_eval_{e:02d}_{b:02d}.png"
     )
+
+    plot_training_losses(recon_losses, adv_losses)
+    # TODO: Move this to a test 
     metrics = test_entire_file(
-        validation_sequence,
-        columns_to_hide,
+        test_file,
+        args.cols_to_hide,
         model_vae,
         model_adversary,
-        sequence_length,
+        args.episode_length,
         debug_file,
-        padding_value,
+        args.padding_value,
         save_path,
     )
     logger.info(f"Validation Metrics are {metrics}")

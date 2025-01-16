@@ -83,46 +83,49 @@ def split_run(run: np.ndarray, split_percentage: List[float]) -> Tuple[np.ndarra
         run[int(len(run) * (split_percentage[0] + split_percentage[1])) :],
     )
 
-def randomly_split_batched_run(run: np.ndarray, split_percentage: List[float], batch_size: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def randomly_pick_sequences_and_split(run: np.ndarray, split_percentage: List[float], seq_len: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    # TODO: Add capacity for oversampling
     """
     Will split a run into train, validation and test
-    Returns: in Order: Train, Validation, Test
+    These two responsibilities are tightly coupled in my opinion. 
+        You pick sequences without concerning yourself without how their split will be.
+    Returns: in Order: Train, Validation, Tests
     """
     assert sum(split_percentage) == 1, "Split Percentages should sum to 1"
     assert len(split_percentage) == 3, "There should be three split_percentages"
 
     run_length = run.shape[0]
-    num_batches = run_length // batch_size
+    num_seqs = run_length // seq_len
 
     # This will now selet them at random to have a better approach to it.
-    batches_offsets_idxs = np.arange(0,run_length, batch_size)
+    seqs_offsets_idxs = np.arange(0,run_length, seq_len)
 
     # Check if last offset is big enough otherwise we drop
-    if (run_length-1)-batches_offsets_idxs[-1] != batch_size:
-        batches_offsets_idxs = batches_offsets_idxs[:-1]
+    if (run_length-1)-seqs_offsets_idxs[-1] != seq_len:
+        seqs_offsets_idxs = seqs_offsets_idxs[:-1]
 
     # Now we shuffle the offsets
-    np.random.shuffle(batches_offsets_idxs)
+    np.random.shuffle(seqs_offsets_idxs)
 
-    train_batches = batches_offsets_idxs[:int(num_batches * split_percentage[0])]
-    val_batches = batches_offsets_idxs[int(num_batches * split_percentage[0]) : int(num_batches * split_percentage[0] + num_batches * split_percentage[1])]
-    # Ignore test batches for now...
+    train_seqs_idxs = seqs_offsets_idxs[:int(num_seqs * split_percentage[0])]
+    val_seqs_idxs = seqs_offsets_idxs[int(num_seqs * split_percentage[0]) : int(num_seqs * split_percentage[0] + num_seqs * split_percentage[1])]
+    # Ignore test seqs for now...
 
-    # Now we pick the actual batches into a 3d array
-    train_batches   = [run[i:i+batch_size] for i in train_batches]
-    val_batches     = [run[i:i+batch_size] for i in val_batches]
+    # Now we pick the actual seqs into a 3d array
+    train_seqs   = [run[idx:idx+seq_len] for idx in train_seqs_idxs]
+    val_seqs     = [run[idx:idx+seq_len] for idx in val_seqs_idxs]
 
-    train_batches = np.stack(train_batches)
-    val_batches   = np.stack(val_batches)
+    train_seqs = np.stack(train_seqs)
+    val_seqs   = np.stack(val_seqs)
 
-    return train_batches, val_batches, np.array([])
+    return train_seqs, val_seqs, np.array([])
 
 
 def split_defacto_runs(
     run_dict: OrderedDict[str, np.ndarray], 
     train_split: float,
     val_split: float,
-    batch_size: int,
+    seq_length: int, 
     scale: bool = True,
 ) -> Tuple[OrderedDict[str, np.ndarray], OrderedDict[str, np.ndarray], np.ndarray]:
     """
@@ -151,23 +154,21 @@ def split_defacto_runs(
     # Test DS will be returned as entire file as we might want the time order untouched
     _, last_file = sorted_run_dict.popitem()
 
-    all_train = []
+    all_train = [] # So normalization is simpler
     for run_name in sorted_run_dict.keys():
-        run = run_dict[run_name]
-        train_ds[run_name], val_ds[run_name], _  = randomly_split_batched_run(run, split_percentages, batch_size)
-        all_train.append(train_ds[run_name])
-        all_train.append(val_ds[run_name])
+        run = sorted_run_dict[run_name]
+        all_train.append(run)
+        train_ds[run_name], val_ds[run_name], _  = randomly_pick_sequences_and_split(run, split_percentages, seq_length)
 
     all_train = np.concatenate(all_train)
-    all_train = all_train.reshape(-1, all_train.shape[2])
 
     if scale: 
         scaler = MinMaxScaler()
         scaler.fit(all_train)
-        for run_name in run_dict:
-            train_ds[run_name] = scaler.transform(train_ds[run_name])
+        for run_name in sorted_run_dict:
+            train_ds[run_name] = scaler.transform(train_ds[run_name].reshape(-1, train_ds[run_name].shape[2])).reshape(-1, seq_length, train_ds[run_name].shape[2])
             if len(val_ds[run_name]) > 0 :
-                val_ds[run_name] = scaler.transform(val_ds[run_name])
+                val_ds[run_name] = scaler.transform(val_ds[run_name].reshape(-1, val_ds[run_name].shape[2])).reshape(-1, seq_length, val_ds[run_name].shape[2])
 
     return train_ds, val_ds, last_file
 

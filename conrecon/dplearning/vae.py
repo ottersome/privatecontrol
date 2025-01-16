@@ -1,3 +1,4 @@
+from typing import Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -514,7 +515,7 @@ class SequenceToScalarVAE(nn.Module):
         h3 = F.relu(self.fc3(z))
         return self.fc4(h3)
 
-    def forward(self, x):
+    def forward(self, x) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
             - x: The input data (batch_size, sequence_length, input_size)
