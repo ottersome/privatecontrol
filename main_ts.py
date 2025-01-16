@@ -14,6 +14,7 @@ from torch import nn
 from torch.nn import functional as F
 from tqdm import tqdm
 import pandas as pd
+import wandb
 
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.data.dataset_generation import batch_generation_randUni, collect_n_sequential_batches, spot_backhistory
@@ -26,6 +27,7 @@ traceback.install()
 
 console = Console()
 
+wandb_on = False
 
 def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
@@ -97,6 +99,11 @@ def argsies() -> argparse.Namespace:
         "--shuffle",
         action="store_false",
         help="Whether or not to shuffle the data",
+    )
+    ap.add_argument(
+        "--wandb",
+        action="store_true",
+        help="Whether or not to use wandb for logging",
     )
 
     args = ap.parse_args()
@@ -266,6 +273,9 @@ def test_entire_file(
         axs[mod,idx].legend()
         axs[mod,idx].plot(truth_to_compare[:,i].squeeze(), label="Truth")
         axs[mod,idx].legend()
+        if wandb_on:
+            wandb.log({f"Reconstruction (Col {i})": recon_to_show[:,i].squeeze().detach().cpu().numpy()})
+            wandb.log({f"Truth (Col {i})": truth_to_compare[:,i].squeeze().detach().cpu().numpy()})
     plt.savefig(f"reconstruction.png")
     plt.close()
 
@@ -285,6 +295,11 @@ def test_entire_file(
 
     plt.savefig(f"adversary.png")
     plt.close()
+
+    # Pass reconstruction and adversary to wandb
+    if wandb_on:
+        wandb.log({"adversary": adv_to_show.squeeze().detach().cpu().numpy()})
+        wandb.log({"truth": adv_truth.squeeze().detach().cpu().numpy()})
 
     model_vae.train()
     model_adversary.train()
@@ -357,7 +372,6 @@ def train_v1(
     logger.info(f"Working with {num_batches} num_batches, each with size:  {batch_size}, and sequence/episode length {sequence_len}")
     recon_losses = []
     adv_losses = []
-    validation_metrics = []
     for e in tqdm(range(epochs), desc="Epochs"):
         logger.info(f"Epoch {e} of {epochs}")
         for batch_no in tqdm(range(num_batches), desc="Batches"):
@@ -381,9 +395,9 @@ def train_v1(
 
             # Check on performance
             batch_y_flat = batch_prv[:,-1,:].view(-1, batch_prv.shape[-1]) # Grab only last in sequeence
-            adv_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
+            adv_train_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
             model_adversary.zero_grad()
-            adv_loss.backward()
+            adv_train_loss.backward()
             opt_adversary.step()
 
             ########################################
@@ -409,13 +423,20 @@ def train_v1(
             opt_vae.step()
             # logger.info(f"Epoch {e} Batch {b} Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
 
+            if wandb_on:
+                wandb.log({
+                    "adv_train_loss": adv_train_loss.item(),
+                    "pub_recon_loss": pub_recon_loss.item(),
+                    "final_loss_scalar": final_loss_scalar.item(),
+                })
+
             if batch_no % 16 == 0:
                 # TODO: Finish the validation implementaion with correlation
                 # - Log the validation metrics here
                 model_vae.eval()
                 model_adversary.eval()
                 with torch.no_grad():
-                    validation_metrics.append(
+                    validation_metrics = (
                         calculate_validation_metrics(
                             all_valid_seqs,
                             pub_columns,
@@ -424,6 +445,12 @@ def train_v1(
                             model_adversary,
                         )
                     )
+                model_vae.train()
+                model_adversary.train()
+
+                # Report to wandb
+                if wandb_on:
+                    wandb.log(validation_metrics)
 
     return model_vae, model_adversary, recon_losses, adv_losses
 
@@ -440,7 +467,7 @@ def calculate_validation_metrics(
     prv_features_idxs: List[int],
     model_vae: nn.Module,
     model_adversary: nn.Module,
-):
+) -> Dict[str, float]:
     """
     We use correlation here as our delta-epsilon metric.
     """
@@ -459,8 +486,12 @@ def calculate_validation_metrics(
     # TODO: Do torch equivalent so we can get the correlation coefficient of the sequences predcicted
     # corr_pub = torch.corrcoef(pub_features[:, -1, :].flatten(), recon_pub.flatten())[0, 1]
     # corr_prv = torch.corrcoef(prv_features[:, -1, :].flatten(), recon_priv.flatten())[0, 1]
+    validation_metrics = {
+        "pub_mse": pub_mse.item(),
+        "prv_mse": prv_mse.item(),
+    }
 
-    return pub_mse, prv_mse
+    return validation_metrics
 
 
 
@@ -526,6 +557,11 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     set_all_seeds(args.seed)
     logger = create_logger("main_training")
+    global wandb_on
+
+    if args.wandb:
+        wandb_on = True
+        wandb.init(project="private_control", config=args)
 
     if args.debug:
         logger.info("\033[1;33m Waiting for debugger to attach...\033[0m")
@@ -623,4 +659,6 @@ def main():
 
 if __name__ == "__main__":
     logger = create_logger("main_vae")
+
+
     main()
