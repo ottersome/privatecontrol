@@ -159,6 +159,7 @@ def split_defacto_runs(
         run = sorted_run_dict[run_name]
         all_train.append(run)
         train_ds[run_name], val_ds[run_name], _  = randomly_pick_sequences_and_split(run, split_percentages, seq_length)
+    all_train.append(last_file)
 
     all_train = np.concatenate(all_train)
 
@@ -169,6 +170,8 @@ def split_defacto_runs(
             train_ds[run_name] = scaler.transform(train_ds[run_name].reshape(-1, train_ds[run_name].shape[2])).reshape(-1, seq_length, train_ds[run_name].shape[2])
             if len(val_ds[run_name]) > 0 :
                 val_ds[run_name] = scaler.transform(val_ds[run_name].reshape(-1, val_ds[run_name].shape[2])).reshape(-1, seq_length, val_ds[run_name].shape[2])
+        # TODO: Set the test file
+        last_file = scaler.transform(last_file)
 
     return train_ds, val_ds, last_file
 

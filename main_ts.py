@@ -102,6 +102,7 @@ def argsies() -> argparse.Namespace:
     )
     ap.add_argument(
         "--wandb",
+        "-w",
         action="store_true",
         help="Whether or not to use wandb for logging",
     )
@@ -206,9 +207,7 @@ def test_entire_file(
     model_vae: nn.Module,
     model_adversary: nn.Module,
     sequence_length: int,
-    debug_file: pd.DataFrame,
     padding_value: int,
-    save_path: str = "./figures/new_data_vae/plot_vaerecon_eval_{}.png",
     batch_size: int = 16,
 ) -> Dict[str, float]:
     """
@@ -298,8 +297,8 @@ def test_entire_file(
 
     # Pass reconstruction and adversary to wandb
     if wandb_on:
+        wandb.log({"reconstruction": recon_to_show.squeeze().detach().cpu().numpy()})
         wandb.log({"adversary": adv_to_show.squeeze().detach().cpu().numpy()})
-        wandb.log({"truth": adv_truth.squeeze().detach().cpu().numpy()})
 
     model_vae.train()
     model_adversary.train()
@@ -630,10 +629,10 @@ def main():
     # Evaluation
     ########################################
     save_path = (
-        f"./figures/new_data_vae/plot_vaerecon_eval_{e:02d}_{b:02d}.png"
+        f"./figures/new_data_vae/plot_vaerecon_eval.png"
     )
-
     plot_training_losses(recon_losses, adv_losses)
+
     # TODO: Move this to a test 
     metrics = test_entire_file(
         test_file,
@@ -641,9 +640,7 @@ def main():
         model_vae,
         model_adversary,
         args.episode_length,
-        debug_file,
         args.padding_value,
-        save_path,
     )
     logger.info(f"Validation Metrics are {metrics}")
 
@@ -659,6 +656,4 @@ def main():
 
 if __name__ == "__main__":
     logger = create_logger("main_vae")
-
-
     main()
