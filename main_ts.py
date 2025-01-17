@@ -1,7 +1,7 @@
 import argparse
 import os
 from math import ceil
-from typing import Dict, List, OrderedDict, Sequence, Tuple
+from typing import Dict, List, Optional, OrderedDict, Sequence, Tuple
 
 import debugpy
 import matplotlib.pyplot as plt
@@ -18,7 +18,7 @@ import wandb
 
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.data.dataset_generation import batch_generation_randUni, collect_n_sequential_batches, spot_backhistory
-from conrecon.dplearning.adversaries import Adversary
+from conrecon.dplearning.adversaries import Adversary, TrivialTemporalAdversary
 from conrecon.dplearning.vae import SequenceToScalarVAE, SequenceToScalarVAE
 from conrecon.plotting import TrainLayout
 from conrecon.utils import create_logger
@@ -201,6 +201,78 @@ def validation_data_organization(
 
     return episodes
 
+def triv_test_entire_file(
+    validation_file: np.ndarray,
+    idxs_colsToGuess: Sequence[int],
+    model_adversary: nn.Module,
+    sequence_length: int,
+    padding_value: int,
+    batch_size: int = 16,
+) -> Dict[str, float]:
+    """
+    Will run a validation iteration for a model
+    Args:
+        - validation_file: Validation data (file_length, num_features)
+        - model: Model to run the validation on
+        - col_to_predict: (0-index) which column we would like to predict
+    """
+    metrics = {
+        "recon_loss": [],
+        "adv_loss": [],
+    }
+
+    model_adversary.eval()
+    device = next(model_adversary.parameters()).device
+    val_x = torch.from_numpy(validation_file).to(torch.float32).to(device)
+
+    # Generate the reconstruction
+    public_columns = list(set(range(val_x.shape[-1])) - set(idxs_colsToGuess))
+    private_columns = list(idxs_colsToGuess)
+    num_columns = len(public_columns) + len(private_columns)
+    num_batches = ceil(len(val_x) / batch_size)
+
+    batch_guesses = []
+    batch_reconstructions = []
+    for batch_no in range(num_batches):
+        ########################################
+        # Sanitize the data
+        ########################################
+        start_idx = batch_no * batch_size
+        end_idx = min((batch_no + 1) * batch_size, val_x.shape[0])
+        backhistory = collect_n_sequential_batches(val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)
+        backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
+
+        # TODO: Incorporate Adversary Guess
+        adversary_guess = model_adversary(backhistory)
+        batch_guesses.append(adversary_guess)
+
+    seq_guesses = torch.cat(batch_guesses, dim=0)
+
+    ########################################
+    # Chart for Adversary
+    ########################################
+    adv_to_show = seq_guesses[:, :]
+    adv_truth = validation_file[:, private_columns]
+    
+    fig = plt.figure(figsize=(16,10))
+    plt.plot(adv_to_show.squeeze().detach().cpu().numpy(), label="Adversary")
+    plt.title("Adversary")
+    plt.legend()
+    plt.plot(adv_truth.squeeze(), label="Truth")
+    plt.title("Truth")
+    plt.legend()
+
+    plt.savefig(f"adversary.png")
+    plt.close()
+
+    # Pass reconstruction and adversary to wandb
+    if wandb_on:
+        wandb.log({"adversary": adv_to_show.squeeze().detach().cpu().numpy()})
+
+    model_adversary.train()
+
+    return {k: np.mean(v).item() for k, v in metrics.items()}
+
 def test_entire_file(
     validation_file: np.ndarray,
     idxs_colsToGuess: Sequence[int],
@@ -311,7 +383,7 @@ def compare_reconstruction():
     """
     raise NotImplementedError
 
-def plot_training_losses(recon_losses: List, adv_losses: List):
+def plot_training_losses(recon_losses: List, adv_losses: List, fig_savedest: str):
     logger.info("Plotting the training losses")
     fig, axs = plt.subplots(1, 2, figsize=(16,10))
     axs[0].plot(recon_losses)
@@ -319,7 +391,7 @@ def plot_training_losses(recon_losses: List, adv_losses: List):
     axs[1].plot(adv_losses)
     axs[1].set_title("Adversary Loss")
 
-    plt.savefig(f"./figures/new_data_vae/recon-adv_losses.png")
+    plt.savefig(fig_savedest)
     plt.close()
 
 def train_v1(
@@ -460,6 +532,29 @@ def federated():
     raise NotImplementedError
 
 
+def triv_calculate_validation_metrics(
+    all_features: torch.Tensor,
+    pub_features_idxs: List[int],
+    prv_features_idxs: List[int],
+    model_adversary: nn.Module,
+) -> Dict[str, float]:
+    """
+    We use correlation here as our delta-epsilon metric.
+    """
+    pub_features = all_features[:, :, pub_features_idxs]
+    prv_features = all_features[:, :, prv_features_idxs]
+
+    recon_priv = model_adversary(pub_features)
+
+    # Lets just do MSE for now
+    prv_mse = torch.mean((prv_features[:, -1, :] - recon_priv) ** 2)
+
+    validation_metrics = {
+        "trv_prv_mse": prv_mse.item(),
+    }
+
+    return validation_metrics
+
 def calculate_validation_metrics(
     all_features: torch.Tensor,
     pub_features_idxs: List[int],
@@ -538,11 +633,96 @@ def set_all_seeds(seed: int):
     np.random.seed(seed)
     torch.manual_seed(seed)
 
-def trivial_correlation_baseline(test_runs: OrderedDict[str, np.ndarray], pretrained_adversary: nn.Module):
+
+def trivial_correlation_baseline(
+    ds_train: OrderedDict[str, np.ndarray],
+    ds_val: OrderedDict[str, np.ndarray],
+    all_columns: List[str],
+    prv_features_idxs: List[int],
+    batch_size,
+    epochs: int,
+    lr: float,
+    ds_test: np.ndarray,
+    device: torch.device,
+):
     """
-    Will try to remove a column and simply try to predeict it out of the other ones. 
+    Will try to remove a column and simply try to predict it out of the other ones. 
     """
-    pass
+    pub_features_idxs  = list(set(range(len(all_columns))) - set(prv_features_idxs))
+
+    all_train_seqs = np.concatenate([ seqs for _, seqs in ds_train.items()], axis=0)
+    all_valid_seqs = np.concatenate([ seqs for _, seqs in ds_val.items()], axis=0)
+    # Shuffle, Batch, Torch Coversion, Feature Separation
+    np.random.shuffle(all_train_seqs)
+    np.random.shuffle(all_valid_seqs)
+    batch_amnt  = all_train_seqs.shape[0] // batch_size
+    all_train_seqs = torch.from_numpy(all_train_seqs).to(torch.float32).to(device)
+    all_valid_seqs = torch.from_numpy(all_valid_seqs).to(torch.float32).to(device)
+    train_pub = all_train_seqs[:,:,pub_features_idxs]
+    train_prv = all_train_seqs[:,:,prv_features_idxs]
+
+    trivial_adversary = TrivialTemporalAdversary(
+        num_pub_features=len(pub_features_idxs),
+        num_prv_features=len(prv_features_idxs),
+        dnn_hidden_size=31,
+        rnn_hidden_size=30,
+    ).to(device)
+    opt_adversary = torch.optim.Adam(trivial_adversary.parameters(), lr=lr)  # type: ignore
+
+    num_batches = ceil(all_train_seqs.shape[0] / batch_size)
+    # Once we have that we can start training the adversary
+    adv_losses = []
+    for e in tqdm(range(epochs), desc="Epochs"):
+        logger.info(f"Epoch {e} of {epochs}")
+        for batch_no in tqdm(range(num_batches), desc="Batches"):
+            batch_all = all_train_seqs[batch_no * batch_size : (batch_no + 1) * batch_size]
+            batch_pub = train_pub[batch_no * batch_size : (batch_no + 1) * batch_size]
+            batch_prv = train_prv[batch_no * batch_size : (batch_no + 1) * batch_size]
+            if batch_pub.shape[0] != batch_size:
+                continue
+
+            logger.info(f"Batch {batch_no} out of {num_batches} with shape {batch_pub.shape}")
+
+            ########################################
+            # 1. Get the adversary to guess the sensitive column
+            ########################################
+            # Get the latent features and sanitized data
+            adversary_guess_flat = trivial_adversary(batch_pub)
+
+            # Check on performance
+            batch_y_flat = batch_prv[:,-1,:].view(-1, batch_prv.shape[-1]) # Grab only last in sequeence
+            adv_train_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
+            trivial_adversary.zero_grad()
+            adv_train_loss.backward()
+            opt_adversary.step()
+
+            adv_losses.append(adv_train_loss.item())
+
+
+            if wandb_on:
+                wandb.log({
+                    "triv_adv_train_loss": adv_train_loss.item(),
+                })
+
+            if batch_no % 16 == 0:
+                # TODO: Finish the validation implementaion with correlation
+                # - Log the validation metrics here
+                trivial_adversary.eval()
+                with torch.no_grad():
+                    validation_metrics = (
+                        triv_calculate_validation_metrics(
+                            all_valid_seqs,
+                            pub_features_idxs,
+                            prv_features_idxs,
+                            trivial_adversary,
+                        )
+                    )
+                trivial_adversary.train()
+
+                # Report to wandb
+                if wandb_on:
+                    wandb.log(validation_metrics)
+    return trivial_adversary, adv_losses
 
 
 def kosambi_karhunen_loeve_baseline(test_runs: OrderedDict[str, np.ndarray], pretrained_adversary: nn.Module):
@@ -550,6 +730,7 @@ def kosambi_karhunen_loeve_baseline(test_runs: OrderedDict[str, np.ndarray], pre
     Kosambi Karhunen Loeve baseline
     """
     pass
+
 
 def main():
     args = argsies()
@@ -573,7 +754,7 @@ def main():
     num_private_cols = len(args.cols_to_hide)
 
     # Separate them into their splits (and also interpolate)
-    train_batches, val_batches, test_file = split_defacto_runs(
+    train_seqs, val_seqs, test_file = split_defacto_runs(
         runs_dict,
         args.splits["train_split"],
         args.splits["val_split"],
@@ -608,7 +789,7 @@ def main():
     logger.debug(f"Runs dict is {runs_dict}")
 
     ########################################
-    # Training
+    # Training VAE and Adversary
     ########################################
     logger.info("Starting the VAE Training")
     model_vae, model_adversary, recon_losses, adv_losses = train_v1(
@@ -616,8 +797,8 @@ def main():
         args.cols_to_hide,
         columns,
         device,
-        train_batches,
-        val_batches,
+        train_seqs,
+        val_seqs,
         args.epochs,
         model_vae,
         model_adversary,
@@ -628,10 +809,7 @@ def main():
     ########################################
     # Evaluation
     ########################################
-    save_path = (
-        f"./figures/new_data_vae/plot_vaerecon_eval.png"
-    )
-    plot_training_losses(recon_losses, adv_losses)
+    plot_training_losses(recon_losses, adv_losses, f"./figures/new_data_vae/recon-adv_losses.png")
 
     # TODO: Move this to a test 
     metrics = test_entire_file(
@@ -644,12 +822,24 @@ def main():
     )
     logger.info(f"Validation Metrics are {metrics}")
 
-    ########################################
-    # Benchmarks
-    ########################################
-    trivial_correlation_baseline(test_runs, model_adversary) 
+    # Benchmarks: 
 
-    kd_transform_baseline(test_runs, model_adversary)
+    ########################################
+    # Training Trivial Adversary
+    ########################################
+    trivial_adverary, adv_losses = trivial_correlation_baseline(
+        train_seqs,
+        val_seqs,
+        columns,
+        args.cols_to_hide,
+        args.batch_size, args.epochs,
+        args.lr,
+        test_file,
+        device,
+    )
+
+
+    # kd_transform_baseline(test_runs, model_adversary)
 
     # 🚩 development so far🚩
     exit()
