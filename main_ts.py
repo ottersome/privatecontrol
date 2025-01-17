@@ -479,6 +479,8 @@ def main():
         model_adversary,
         args.episode_length,
         args.padding_value,
+        args.batch_size,
+        wandb_on=args.wandb
     )
     logger.info(f"Validation Metrics are {metrics}")
 
@@ -496,6 +498,15 @@ def main():
         args.lr,
         test_file,
         device,
+    )
+    triv_test_entire_file(
+        test_file,
+        args.cols_to_hide,
+        trivial_adverary,
+        args.episode_length,
+        args.padding_value,
+        args.batch_size,
+        wandb_on=args.wandb
     )
 
 

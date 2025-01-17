@@ -29,6 +29,8 @@ def triv_test_entire_file(
         "recon_loss": [],
         "adv_loss": [],
     }
+    amnt_columns = validation_file.shape[-1]
+    pub_features_idxs = list(set(range(amnt_columns)) - set(idxs_colsToGuess))
 
     model_adversary.eval()
     device = next(model_adversary.parameters()).device
@@ -50,9 +52,10 @@ def triv_test_entire_file(
         end_idx = min((batch_no + 1) * batch_size, val_x.shape[0])
         backhistory = collect_n_sequential_batches(val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)
         backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
+        backhistory_pub = backhistory[:,:,pub_features_idxs]
 
         # TODO: Incorporate Adversary Guess
-        adversary_guess = model_adversary(backhistory)
+        adversary_guess = model_adversary(backhistory_pub)
         batch_guesses.append(adversary_guess)
 
     seq_guesses = torch.cat(batch_guesses, dim=0)
@@ -71,7 +74,7 @@ def triv_test_entire_file(
     plt.title("Truth")
     plt.legend()
 
-    plt.savefig(f"adversary.png")
+    plt.savefig(f"figures/triv_adversary.png")
     plt.close()
 
     # Pass reconstruction and adversary to wandb
@@ -83,7 +86,7 @@ def triv_test_entire_file(
     return {k: np.mean(v).item() for k, v in metrics.items()}
 
 def test_entire_file(
-    validation_file: np.ndarray,
+    test_file: np.ndarray,
     idxs_colsToGuess: Sequence[int],
     model_vae: nn.Module,
     model_adversary: nn.Module,
@@ -109,7 +112,7 @@ def test_entire_file(
     device = next(model_vae.parameters()).device
 
     model_device = next(model_vae.parameters()).device
-    val_x = torch.from_numpy(validation_file).to(torch.float32).to(model_device)
+    val_x = torch.from_numpy(test_file).to(torch.float32).to(model_device)
 
     # Generate the reconstruction
     public_columns = list(set(range(val_x.shape[-1])) - set(idxs_colsToGuess))
@@ -144,7 +147,7 @@ def test_entire_file(
     # Chart For Reconstruction
     ########################################
     recon_to_show = seq_reconstructions[:, some_8_idxs]
-    truth_to_compare = validation_file[:, some_8_idxs]
+    truth_to_compare = test_file[:, some_8_idxs]
     fig,axs = plt.subplots(4,2,figsize=(32,20))
     for i in range(recon_to_show.shape[1]):
         mod = i % 4
@@ -157,14 +160,14 @@ def test_entire_file(
         if wandb_on:
             wandb.log({f"Reconstruction (Col {i})": recon_to_show[:,i].squeeze().detach().cpu().numpy()})
             wandb.log({f"Truth (Col {i})": truth_to_compare[:,i].squeeze().detach().cpu().numpy()})
-    plt.savefig(f"reconstruction.png")
+    plt.savefig(f"figures/vae_reconstruction.png")
     plt.close()
 
     ########################################
     # Chart for Adversary
     ########################################
     adv_to_show = seq_guesses[:, :]
-    adv_truth = validation_file[:, private_columns]
+    adv_truth = test_file[:, private_columns]
     
     fig = plt.figure(figsize=(16,10))
     plt.plot(adv_to_show.squeeze().detach().cpu().numpy(), label="Adversary")
@@ -174,7 +177,7 @@ def test_entire_file(
     plt.title("Truth")
     plt.legend()
 
-    plt.savefig(f"adversary.png")
+    plt.savefig(f"figures/vae_adversary.png")
     plt.close()
 
     # Pass reconstruction and adversary to wandb
