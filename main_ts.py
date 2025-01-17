@@ -1,7 +1,7 @@
 import argparse
 import os
 from math import ceil
-from typing import Dict, List, Optional, OrderedDict, Sequence, Tuple
+from typing import Dict, List, OrderedDict, Tuple
 
 import debugpy
 import matplotlib.pyplot as plt
@@ -13,15 +13,16 @@ from rich.live import Live
 from torch import nn
 from torch.nn import functional as F
 from tqdm import tqdm
-import pandas as pd
 import wandb
 
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
-from conrecon.data.dataset_generation import batch_generation_randUni, collect_n_sequential_batches, spot_backhistory
+from conrecon.data.dataset_generation import collect_n_sequential_batches, spot_backhistory
 from conrecon.dplearning.adversaries import Adversary, TrivialTemporalAdversary
 from conrecon.dplearning.vae import SequenceToScalarVAE, SequenceToScalarVAE
 from conrecon.plotting import TrainLayout
-from conrecon.utils import create_logger
+from conrecon.utils import create_logger, set_seeds
+from conrecon.validation_functions import calculate_validation_metrics
+from conrecon.performance_test_functions import test_entire_file, triv_test_entire_file
 
 traceback.install()
 
@@ -115,267 +116,6 @@ def argsies() -> argparse.Namespace:
         os.makedirs(".cache/")
     return args
     # Sanity check
-
-
-def train_w_metrics(
-    model: nn.Module,
-    dataset: Tuple[np.ndarray, np.ndarray],
-    epochs: int,
-    batch_size: int,
-    saveplot_dest: str,
-    train_percent: float,
-    device: torch.device,
-):
-    tlosses = []
-    vlosses = []
-    train_size = int(len(dataset[0]) * train_percent)
-    batch_count = int(train_size // batch_size)
-    tdataset = (dataset[0][:train_size, :], dataset[1][:train_size, :])
-    vdataset = (dataset[0][train_size:, :], dataset[1][train_size:, :])
-
-    # layout, progress = make_layout(0, tlosses, vlosses)
-    layout = TrainLayout(epochs, batch_count, tlosses, vlosses)
-    batch_num = 0
-    with Live(layout.layout, console=console, refresh_per_second=10) as live:
-        for epoch, batch_no, tloss, vloss in train(
-            model, tdataset, vdataset, epochs, batch_size, saveplot_dest, device
-        ):
-            batch_num += 1
-            logger.debug(f"Batch number: {batch_num}")
-            tlosses.append(tloss)
-            vlosses.append(vloss)
-            layout.update(epoch, batch_no, tloss, vloss)
-
-    # TODO: Recover this
-    # Plot the losses after the episode finishes
-    # t_diff_in_order = np.max(tlosses) - np.min(tlosses) > 1e1
-    # v_diff_in_order = np.max(vlosses) - np.min(vlosses) > 1e1
-    # fig, axs = plt.subplots(1, 2)
-    # axs[0].plot(tlosses)
-    # # if t_diff_in_order:
-    # # axs[0].set_yscale("log")
-    # axs[0].set_title("Training Loss")
-    # axs[1].plot(vlosses)
-    # # if v_diff_in_order:
-    # #     axs[1].set_yscale("log")
-    # axs[1].set_title("Validation Loss")
-    # plt.show()
-    #
-
-
-def indiscriminate_supervision(ds: Dict[str, np.ndarray]) -> np.ndarray:
-    """
-    Cannot think of better name for now.
-    It will:
-        - Take a Dict[str, np.ndarry].
-        - Discard keys
-        - Mix around the data that is correlated
-    Yes, these are some assumptinos. But its only to get it running
-    Returns:
-        - np.ndarray: A new data set of shape (len(ds), context_columns))
-    """
-    final_ds = []
-    for k, v in ds.items():
-        final_ds.append(v)
-    # Shuffle it around
-    final_ds = np.concatenate(final_ds)
-    # TODO: Check that the shuffling is being done right
-    np.random.shuffle(final_ds)
-    return final_ds
-
-def validation_data_organization(
-    ds: Dict[str, np.ndarray], snapshot_length: int = 12, num_episodes: int = 3
-) -> List[np.ndarray]:
-    """
-    Will take random snapshots of samples from the validation data.
-    """
-    episodes = []
-    for i in range(num_episodes):
-        random_bucket_key = np.random.choice(list(ds.keys()))
-        random_bucket = ds[random_bucket_key]
-        bucket_length = len(random_bucket)
-        random_position = np.random.randint(bucket_length - snapshot_length)
-        episodes.append(
-            random_bucket[random_position : random_position + snapshot_length]
-        )
-
-    return episodes
-
-def triv_test_entire_file(
-    validation_file: np.ndarray,
-    idxs_colsToGuess: Sequence[int],
-    model_adversary: nn.Module,
-    sequence_length: int,
-    padding_value: int,
-    batch_size: int = 16,
-) -> Dict[str, float]:
-    """
-    Will run a validation iteration for a model
-    Args:
-        - validation_file: Validation data (file_length, num_features)
-        - model: Model to run the validation on
-        - col_to_predict: (0-index) which column we would like to predict
-    """
-    metrics = {
-        "recon_loss": [],
-        "adv_loss": [],
-    }
-
-    model_adversary.eval()
-    device = next(model_adversary.parameters()).device
-    val_x = torch.from_numpy(validation_file).to(torch.float32).to(device)
-
-    # Generate the reconstruction
-    public_columns = list(set(range(val_x.shape[-1])) - set(idxs_colsToGuess))
-    private_columns = list(idxs_colsToGuess)
-    num_columns = len(public_columns) + len(private_columns)
-    num_batches = ceil(len(val_x) / batch_size)
-
-    batch_guesses = []
-    batch_reconstructions = []
-    for batch_no in range(num_batches):
-        ########################################
-        # Sanitize the data
-        ########################################
-        start_idx = batch_no * batch_size
-        end_idx = min((batch_no + 1) * batch_size, val_x.shape[0])
-        backhistory = collect_n_sequential_batches(val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)
-        backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
-
-        # TODO: Incorporate Adversary Guess
-        adversary_guess = model_adversary(backhistory)
-        batch_guesses.append(adversary_guess)
-
-    seq_guesses = torch.cat(batch_guesses, dim=0)
-
-    ########################################
-    # Chart for Adversary
-    ########################################
-    adv_to_show = seq_guesses[:, :]
-    adv_truth = validation_file[:, private_columns]
-    
-    fig = plt.figure(figsize=(16,10))
-    plt.plot(adv_to_show.squeeze().detach().cpu().numpy(), label="Adversary")
-    plt.title("Adversary")
-    plt.legend()
-    plt.plot(adv_truth.squeeze(), label="Truth")
-    plt.title("Truth")
-    plt.legend()
-
-    plt.savefig(f"adversary.png")
-    plt.close()
-
-    # Pass reconstruction and adversary to wandb
-    if wandb_on:
-        wandb.log({"adversary": adv_to_show.squeeze().detach().cpu().numpy()})
-
-    model_adversary.train()
-
-    return {k: np.mean(v).item() for k, v in metrics.items()}
-
-def test_entire_file(
-    validation_file: np.ndarray,
-    idxs_colsToGuess: Sequence[int],
-    model_vae: nn.Module,
-    model_adversary: nn.Module,
-    sequence_length: int,
-    padding_value: int,
-    batch_size: int = 16,
-) -> Dict[str, float]:
-    """
-    Will run a validation iteration for a model
-    Args:
-        - validation_file: Validation data (file_length, num_features)
-        - model: Model to run the validation on
-        - col_to_predict: (0-index) which column we would like to predict
-    """
-    metrics = {
-        "recon_loss": [],
-        "adv_loss": [],
-    }
-
-    model_vae.eval()
-    model_adversary.eval()
-    device = next(model_vae.parameters()).device
-
-    model_device = next(model_vae.parameters()).device
-    val_x = torch.from_numpy(validation_file).to(torch.float32).to(model_device)
-
-    # Generate the reconstruction
-    public_columns = list(set(range(val_x.shape[-1])) - set(idxs_colsToGuess))
-    private_columns = list(idxs_colsToGuess)
-    num_columns = len(public_columns) + len(private_columns)
-    num_batches = ceil(len(val_x) / batch_size)
-
-    batch_guesses = []
-    batch_reconstructions = []
-    for batch_no in range(num_batches):
-        ########################################
-        # Sanitize the data
-        ########################################
-        start_idx = batch_no * batch_size
-        end_idx = min((batch_no + 1) * batch_size, val_x.shape[0])
-        backhistory = collect_n_sequential_batches(val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)
-        backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
-        latent_z, sanitized_data, kl_divergence = model_vae(backhistory)
-
-        # TODO: Incorporate Adversary Guess
-        adversary_guess = model_adversary(latent_z)
-        batch_guesses.append(adversary_guess)
-        batch_reconstructions.append(sanitized_data)
-
-    seq_guesses = torch.cat(batch_guesses, dim=0)
-    seq_reconstructions = torch.cat(batch_reconstructions, dim=0)
-
-    # Lets now save the figure
-    some_8_idxs = np.random.randint(0, seq_reconstructions.shape[1], 8)
-
-    ########################################
-    # Chart For Reconstruction
-    ########################################
-    recon_to_show = seq_reconstructions[:, some_8_idxs]
-    truth_to_compare = validation_file[:, some_8_idxs]
-    fig,axs = plt.subplots(4,2,figsize=(32,20))
-    for i in range(recon_to_show.shape[1]):
-        mod = i % 4
-        idx = i // 4
-        axs[mod,idx].plot(recon_to_show[:,i].squeeze().detach().cpu().numpy(), label="Reconstruction")
-        axs[mod,idx].set_title("Reconstruction Vs Truth")
-        axs[mod,idx].legend()
-        axs[mod,idx].plot(truth_to_compare[:,i].squeeze(), label="Truth")
-        axs[mod,idx].legend()
-        if wandb_on:
-            wandb.log({f"Reconstruction (Col {i})": recon_to_show[:,i].squeeze().detach().cpu().numpy()})
-            wandb.log({f"Truth (Col {i})": truth_to_compare[:,i].squeeze().detach().cpu().numpy()})
-    plt.savefig(f"reconstruction.png")
-    plt.close()
-
-    ########################################
-    # Chart for Adversary
-    ########################################
-    adv_to_show = seq_guesses[:, :]
-    adv_truth = validation_file[:, private_columns]
-    
-    fig = plt.figure(figsize=(16,10))
-    plt.plot(adv_to_show.squeeze().detach().cpu().numpy(), label="Adversary")
-    plt.title("Adversary")
-    plt.legend()
-    plt.plot(adv_truth.squeeze(), label="Truth")
-    plt.title("Truth")
-    plt.legend()
-
-    plt.savefig(f"adversary.png")
-    plt.close()
-
-    # Pass reconstruction and adversary to wandb
-    if wandb_on:
-        wandb.log({"reconstruction": recon_to_show.squeeze().detach().cpu().numpy()})
-        wandb.log({"adversary": adv_to_show.squeeze().detach().cpu().numpy()})
-
-    model_vae.train()
-    model_adversary.train()
-
-    return {k: np.mean(v).item() for k, v in metrics.items()}
 
 def compare_reconstruction():
     """
@@ -555,86 +295,7 @@ def triv_calculate_validation_metrics(
 
     return validation_metrics
 
-def calculate_validation_metrics(
-    all_features: torch.Tensor,
-    pub_features_idxs: List[int],
-    prv_features_idxs: List[int],
-    model_vae: nn.Module,
-    model_adversary: nn.Module,
-) -> Dict[str, float]:
-    """
-    We use correlation here as our delta-epsilon metric.
-    """
-    prv_features = all_features[:, :, prv_features_idxs]
-    pub_features = all_features[:, :, pub_features_idxs]
-
-    # Run data through models.
-    latent_z, sanitized_data, kl_divergence = model_vae(all_features)
-    recon_pub = sanitized_data[:, pub_features_idxs]
-    recon_priv = model_adversary(latent_z)
-
-    # Lets just do MSE for now
-    pub_mse = torch.mean((pub_features[:, -1, :] - recon_pub) ** 2)
-    prv_mse = torch.mean((prv_features[:, -1, :] - recon_priv) ** 2)
-
-    # TODO: Do torch equivalent so we can get the correlation coefficient of the sequences predcicted
-    # corr_pub = torch.corrcoef(pub_features[:, -1, :].flatten(), recon_pub.flatten())[0, 1]
-    # corr_prv = torch.corrcoef(prv_features[:, -1, :].flatten(), recon_priv.flatten())[0, 1]
-    validation_metrics = {
-        "pub_mse": pub_mse.item(),
-        "prv_mse": prv_mse.item(),
-    }
-
-    return validation_metrics
-
-
-
-# This ought to be ran iterarively witht the encoder so that this also learns to better extract from the new encoder version
-# TOREM: (Maybe) Consider removing this if you end up moving it elsewhere
-def train_adversary_iteration(
-    adversary: nn.Module,
-    data: torch.Tensor,
-    epochs: int = 1,
-    adv_batch_size: int = 64,
-    col_idx_to_predict: int = 4,
-):
-    """
-    Will train an adversary to guess the next value
-    """
-    adversary.train()
-    criterion = nn.MSELoss()
-    # FIX: Remove the hyperparameters
-    optimizer = torch.optim.Adam(adversary.parameters(), lr=0.01)  # type: ignore
-
-    # Once this is just regression
-    for e in range(epochs):
-        for b in range(data.shape[0] // adv_batch_size):
-            # Get the batch
-            adversary.zero_grad()
-            batch_x = data[b * adv_batch_size : (b + 1) * adv_batch_size]
-            batch_y = data[b * adv_batch_size : (b + 1) * adv_batch_size]
-            # Get the prediction
-            preds = adversary(batch_x)
-
-            # Calculate the loss
-            loss = criterion(preds, batch_y)
-            loss.backward()
-            optimizer.step()
-
-    adversary.eval()
-
-    return adversary
-
-
-def set_all_seeds(seed: int):
-    import numpy as np
-    import torch
-
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-
-def trivial_correlation_baseline(
+def baseline_trivial_correlation(
     ds_train: OrderedDict[str, np.ndarray],
     ds_val: OrderedDict[str, np.ndarray],
     all_columns: List[str],
@@ -725,7 +386,7 @@ def trivial_correlation_baseline(
     return trivial_adversary, adv_losses
 
 
-def kosambi_karhunen_loeve_baseline(test_runs: OrderedDict[str, np.ndarray], pretrained_adversary: nn.Module):
+def baseline_kosambi_karhunen_loeve(test_runs: OrderedDict[str, np.ndarray], pretrained_adversary: nn.Module):
     """
     Kosambi Karhunen Loeve baseline
     """
@@ -735,9 +396,8 @@ def kosambi_karhunen_loeve_baseline(test_runs: OrderedDict[str, np.ndarray], pre
 def main():
     args = argsies()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    set_all_seeds(args.seed)
+    set_seeds(args.seed)
     logger = create_logger("main_training")
-    global wandb_on
 
     if args.wandb:
         wandb_on = True
@@ -827,7 +487,7 @@ def main():
     ########################################
     # Training Trivial Adversary
     ########################################
-    trivial_adverary, adv_losses = trivial_correlation_baseline(
+    trivial_adverary, adv_losses = baseline_trivial_correlation(
         train_seqs,
         val_seqs,
         columns,

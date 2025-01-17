@@ -33,8 +33,6 @@ def set_seeds(seed: int):
     np.random.seed(seed)
     torch.manual_seed(seed)
 
-
-
 def create_logger(name: str) -> logging.Logger:
     # Check if .log folder exists if ot crea
     if not os.path.exists(f"logs/"):

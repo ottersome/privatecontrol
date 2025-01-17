@@ -8,6 +8,9 @@ data/defacto.csv
 run_*.csv
 runs.tar
 
-data
+./data/
 launch.json
 *.png
+wandb
+wandb
+wandb
