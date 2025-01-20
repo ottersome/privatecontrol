@@ -14,15 +14,16 @@ from torch import nn
 from torch.nn import functional as F
 from tqdm import tqdm
 import wandb
+from sklearn.decomposition import PCA
 
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.data.dataset_generation import collect_n_sequential_batches, spot_backhistory
-from conrecon.dplearning.adversaries import Adversary, TrivialTemporalAdversary
+from conrecon.dplearning.adversaries import Adversary, TrivialTemporalAdversary, PCATemporalAdversary
 from conrecon.dplearning.vae import SequenceToScalarVAE, SequenceToScalarVAE
 from conrecon.plotting import TrainLayout
 from conrecon.utils import create_logger, set_seeds
 from conrecon.validation_functions import calculate_validation_metrics
-from conrecon.performance_test_functions import test_entire_file, triv_test_entire_file
+from conrecon.performance_test_functions import test_entire_file, triv_test_entire_file, pca_test_entire_file
 
 traceback.install()
 
@@ -106,6 +107,12 @@ def argsies() -> argparse.Namespace:
         "-w",
         action="store_true",
         help="Whether or not to use wandb for logging",
+    )
+    ap.add_argument(
+        "--correlation_threshold",
+        default=0.1,
+        type=float,
+        help="The threshold for retaining principal components",
     )
 
     args = ap.parse_args()
@@ -295,6 +302,108 @@ def triv_calculate_validation_metrics(
 
     return validation_metrics
 
+
+def baseline_pca_decorrelation(
+    ds_train: OrderedDict[str, np.ndarray],
+    ds_val: OrderedDict[str, np.ndarray],
+    prv_features_idxs: List[int],
+    batch_size: int,
+    correlation_threshold: float,
+    epochs: int,
+    lr: float,
+    device: torch.device,
+) -> Tuple[nn.Module, np.ndarray]:
+    pca = PCA()
+
+    first_key = list(ds_train.keys())[0]
+    num_features = ds_train[first_key].shape[-1]
+    pub_features_idxs = list(set(range(num_features)) - set(prv_features_idxs))
+    sequence_length = ds_train[first_key].shape[1]
+
+    # We need to concatenate the features as usual 
+    all_train_seqs = np.concatenate([ seqs for _, seqs in ds_train.items()], axis=0)
+    all_valid_seqs = np.concatenate([ seqs for _, seqs in ds_val.items()], axis=0)
+    # Shuffle, Batch, Torch Coversion, Feature Separation
+    
+    all_train_seqs = torch.from_numpy(all_train_seqs).to(torch.float32).to(device)
+    all_valid_seqs = torch.from_numpy(all_valid_seqs).to(torch.float32).to(device)
+    train_pub = all_train_seqs[:,:,pub_features_idxs]
+    train_prv = all_train_seqs[:,:,prv_features_idxs].squeeze()
+
+    train_pub_flat = train_pub.view(-1, train_pub.shape[-1]).cpu().numpy()
+    train_pub_centered = train_pub_flat - np.mean(train_pub_flat, axis=0)
+    train_prv_flat = train_prv.view(-1).cpu().numpy()
+
+    #  Now we can start fitting the pca 
+    pca_transform = pca.fit(train_pub_flat)
+    # Shape is (num_components, num_features), fyi for indexing purposes
+    principal_components = pca_transform.components_
+    # Takes in (num_componets, num_features) and returns (num_components, num_samples)
+    pub_pc_scores = train_pub_flat.dot(principal_components.T)
+
+    retained_components = []
+    for i in range(principal_components.shape[0]):
+        pc_i_scores = pub_pc_scores[:,i]
+        corr_i = np.corrcoef(pc_i_scores, train_prv_flat)[0,1]
+        if abs(corr_i) <= correlation_threshold:
+            retained_components.append(principal_components[i])
+
+    retained_components = np.array(retained_components)
+    # Project the data onto the retained components
+    sanitized_projections_for_training = train_pub_centered.dot(retained_components.T)
+    sanitized_feature_nums = retained_components.shape[0]
+    sanitized_projections_for_training = sanitized_projections_for_training.reshape(-1, sequence_length, sanitized_feature_nums)
+    sanitized_projections_for_training = torch.from_numpy(sanitized_projections_for_training).to(torch.float32).to(device)
+    num_batches = ceil(sanitized_projections_for_training.shape[0] / batch_size)
+
+    # We need to restructure the data.
+    logger.info("Restructuring the data")
+
+    criterion = nn.MSELoss()
+    adversary = TrivialTemporalAdversary(
+        num_pub_features=sanitized_feature_nums,
+        num_prv_features=len(prv_features_idxs),
+        dnn_hidden_size=31,
+        rnn_hidden_size=30,
+    ).to(device)
+    opt_adversary = torch.optim.Adam(adversary.parameters(), lr=lr) # type: ignore
+
+    ########################################
+    # Now we start the training on the components.
+    ########################################
+    reconstruction_losses = []
+    for e in tqdm(range(epochs), desc="Epochs"):
+        logger.info(f"Epoch {e} of {epochs}")
+        for batch_no in tqdm(range(num_batches), desc="Batches"):
+            # Now Get the new VAE generations
+            batch_pub = sanitized_projections_for_training[batch_no * batch_size : (batch_no + 1) * batch_size]
+            batch_prv = train_prv[batch_no * batch_size : (batch_no + 1) * batch_size]
+
+            adversary_guess = adversary(batch_pub).squeeze()
+
+            # Calculate the loss
+            loss = criterion(adversary_guess, batch_prv[:,-1])
+            adversary.zero_grad()
+            loss.backward()
+            opt_adversary.step()
+            reconstruction_losses.append(loss.item())
+
+            if wandb_on:
+                wandb.log({
+                    "adv_train_loss": loss.item(),
+                })
+            print("Here")
+
+    # Plot reconstruction losses
+    plt.plot(reconstruction_losses)
+    plt.savefig(f"./figures/pca_recon_losses.png")
+    plt.close()
+
+    return adversary, retained_components
+
+
+
+
 def baseline_trivial_correlation(
     ds_train: OrderedDict[str, np.ndarray],
     ds_val: OrderedDict[str, np.ndarray],
@@ -328,6 +437,7 @@ def baseline_trivial_correlation(
         dnn_hidden_size=31,
         rnn_hidden_size=30,
     ).to(device)
+
     opt_adversary = torch.optim.Adam(trivial_adversary.parameters(), lr=lr)  # type: ignore
 
     num_batches = ceil(all_train_seqs.shape[0] / batch_size)
@@ -447,6 +557,31 @@ def main():
 
     logger.debug(f"Columns are {columns}")
     logger.debug(f"Runs dict is {runs_dict}")
+
+    # TOREM: Move this lower down for when we are done with it. 
+    pca_model_adversary, retained_components = baseline_pca_decorrelation(
+        train_seqs,
+        val_seqs,
+        args.cols_to_hide,
+        args.batch_size,
+        args.correlation_threshold,
+        args.epochs,
+        args.lr,
+        device,
+    )
+    # Now we run the test on this 
+    pca_test_entire_file(
+        test_file,
+        args.cols_to_hide,
+        pca_model_adversary,
+        retained_components,
+        args.episode_length,
+        args.padding_value,
+        logger,
+        args.batch_size,
+        wandb_on=args.wandb
+    )
+    exit() # TOREM:
 
     ########################################
     # Training VAE and Adversary
