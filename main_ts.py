@@ -561,32 +561,6 @@ def main():
     logger.debug(f"Columns are {columns}")
     logger.debug(f"Runs dict is {runs_dict}")
 
-    # TOREM: Move this lower down for when we are done with it. 
-    pca_model_adversary, retained_components = baseline_pca_decorrelation(
-        train_seqs,
-        val_seqs,
-        args.cols_to_hide,
-        args.batch_size,
-        args.correlation_threshold,
-        args.epochs,
-        args.lr,
-        device,
-    )
-    # Now we run the test on this 
-    pca_test_entire_file(
-        test_file,
-        args.cols_to_hide,
-        pca_model_adversary,
-        retained_components,
-        args.episode_length,
-        args.padding_value,
-        logger,
-        args.batch_size,
-        wandb_on=args.wandb
-    )
-    logger.info("Done with the PCA test")
-    exit() # TOREM:
-
     ########################################
     # Training VAE and Adversary
     ########################################
@@ -604,13 +578,7 @@ def main():
         args.lr,
         args.kl_dig_hypr,
     )
-
-    ########################################
-    # Evaluation
-    ########################################
     plot_training_losses(recon_losses, adv_losses, f"./figures/new_data_vae/recon-adv_losses.png")
-
-    # TODO: Move this to a test 
     metrics = test_entire_file(
         test_file,
         args.cols_to_hide,
@@ -623,9 +591,9 @@ def main():
     )
     logger.info(f"Validation Metrics are {metrics}")
 
-    # Benchmarks: 
-
     ########################################
+    ## Benchmarks
+    #
     # Training Trivial Adversary
     ########################################
     trivial_adverary, adv_losses = baseline_trivial_correlation(
@@ -648,10 +616,36 @@ def main():
         wandb_on=args.wandb
     )
 
+    ########################################
+    # Training the PCA based baseline
+    ########################################
+    # TOREM: Move this lower down for when we are done with it. 
+    logger.info("Starting the PCA decorrelation and training")
+    pca_model_adversary, retained_components = baseline_pca_decorrelation(
+        train_seqs,
+        val_seqs,
+        args.cols_to_hide,
+        args.batch_size,
+        args.correlation_threshold,
+        args.epochs,
+        args.lr,
+        device,
+    )
+    logger.info("PCA training and decorrelation complete. Now testing...")
+    pca_test_entire_file(
+        test_file,
+        args.cols_to_hide,
+        pca_model_adversary,
+        retained_components,
+        args.episode_length,
+        args.padding_value,
+        logger,
+        args.batch_size,
+        wandb_on=args.wandb
+    )
+    logger.info("Done with the PCA test")
 
-    # kd_transform_baseline(test_runs, model_adversary)
-
-    # 🚩 development so far🚩
+    logger.info("All baselines complete. Exiting")
     exit()
 
 if __name__ == "__main__":
