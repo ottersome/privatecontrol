@@ -141,19 +141,21 @@ def pca_test_entire_file(
     # Chart for Reconstruction
     ########################################
     logger.info("PCA Reconstruction Graph")
-    recon_to_show = seq_guesses[:, :]
-    truth_to_compare = test_file[:, prv_features_idxs]
+    idxs_of_choice = list(set(range(seq_guesses.shape[-1])) - set(prv_features_idxs))
+    random_8_idxs = np.random.choice(idxs_of_choice, 8, replace=False)
+    recons_to_show = seq_guesses[:, random_8_idxs]
+    truth_to_compare = test_file[:, random_8_idxs]
     fig,axs = plt.subplots(4,2,figsize=(32,20))
-    for i in range(recon_to_show.shape[1]):
+    for i in range(recons_to_show.shape[1]):
         mod = i % 4
         idx = i // 4
-        axs[mod,idx].plot(recon_to_show[:,i].squeeze().detach().cpu().numpy(), label="Reconstruction")
+        axs[mod,idx].plot(recons_to_show[:,i].squeeze().detach().cpu().numpy(), label="Reconstruction")
         axs[mod,idx].set_title("Reconstruction Vs Truth")
         axs[mod,idx].legend()
         axs[mod,idx].plot(truth_to_compare[:,i].squeeze(), label="Truth")
         axs[mod,idx].legend()
         if wandb_on:
-            wandb.log({f"Reconstruction (Col {i})": recon_to_show[:,i].squeeze().detach().cpu().numpy()})
+            wandb.log({f"Reconstruction (Col {i})": recons_to_show[:,i].squeeze().detach().cpu().numpy()})
             wandb.log({f"Truth (Col {i})": truth_to_compare[:,i].squeeze().detach().cpu().numpy()})
     plt.savefig(f"figures/pca_reconstruction.png")
     logger.info(f"Saved the reconstruction figure to {f'figures/pca_reconstruction.png'}")

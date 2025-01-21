@@ -360,9 +360,9 @@ def baseline_pca_decorrelation(
     logger.info("Restructuring the data")
 
     criterion = nn.MSELoss()
-    adversary = TrivialTemporalAdversary(
-        num_pub_features=sanitized_feature_nums,
-        num_prv_features=len(prv_features_idxs),
+    adversary = PCATemporalAdversary(
+        num_principal_components=retained_components.shape[0],
+        num_features_to_recon=num_features,
         dnn_hidden_size=31,
         rnn_hidden_size=30,
     ).to(device)
@@ -378,11 +378,12 @@ def baseline_pca_decorrelation(
             # Now Get the new VAE generations
             batch_pub = sanitized_projections_for_training[batch_no * batch_size : (batch_no + 1) * batch_size]
             batch_prv = train_prv[batch_no * batch_size : (batch_no + 1) * batch_size]
+            all_feats = all_train_seqs[batch_no * batch_size : (batch_no + 1) * batch_size]
 
             adversary_guess = adversary(batch_pub).squeeze()
 
             # Calculate the loss
-            loss = criterion(adversary_guess, batch_prv[:,-1])
+            loss = criterion(adversary_guess, all_feats[:,-1])
             adversary.zero_grad()
             loss.backward()
             opt_adversary.step()
@@ -395,7 +396,9 @@ def baseline_pca_decorrelation(
             print("Here")
 
     # Plot reconstruction losses
+    plt.figure(figsize=(16,10))
     plt.plot(reconstruction_losses)
+    plt.title("Reconstruction Loss")
     plt.savefig(f"./figures/pca_recon_losses.png")
     plt.close()
 
@@ -581,6 +584,7 @@ def main():
         args.batch_size,
         wandb_on=args.wandb
     )
+    logger.info("Done with the PCA test")
     exit() # TOREM:
 
     ########################################
