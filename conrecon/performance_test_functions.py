@@ -188,7 +188,7 @@ def pca_test_entire_file(
 
     return {k: np.mean(v).item() for k, v in metrics.items()}
 
-def test_entire_file(
+def vae_test_file(
     test_file: np.ndarray,
     idxs_colsToGuess: Sequence[int],
     model_vae: nn.Module,

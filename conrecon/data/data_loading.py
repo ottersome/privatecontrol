@@ -152,14 +152,14 @@ def split_defacto_runs(
     )
 
     # Test DS will be returned as entire file as we might want the time order untouched
-    _, last_file = sorted_run_dict.popitem()
+    _, test_file = sorted_run_dict.popitem()
 
     all_train = [] # So normalization is simpler
     for run_name in sorted_run_dict.keys():
         run = sorted_run_dict[run_name]
         all_train.append(run)
         train_ds[run_name], val_ds[run_name], _  = randomly_pick_sequences_and_split(run, split_percentages, seq_length)
-    all_train.append(last_file)
+    all_train.append(test_file)
 
     all_train = np.concatenate(all_train)
 
@@ -171,13 +171,14 @@ def split_defacto_runs(
             if len(val_ds[run_name]) > 0 :
                 val_ds[run_name] = scaler.transform(val_ds[run_name].reshape(-1, val_ds[run_name].shape[2])).reshape(-1, seq_length, val_ds[run_name].shape[2])
         # TODO: Set the test file
-        last_file = scaler.transform(last_file)
+        test_file = scaler.transform(test_file)
 
-    return train_ds, val_ds, last_file
+    return train_ds, val_ds, test_file
 
 def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray], pd.DataFrame]:
     """
-    Load the data from the defacto dataset
+    Load the data from the already-split files
+    Also does interpolation
 
     Returns:
         - columns_so_far: The columns that are shred across all runs

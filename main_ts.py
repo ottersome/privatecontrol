@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.live import Live
 from torch import nn
 from torch.nn import functional as F
+from torch.serialization import check_module_version_greater_or_equal
 from tqdm import tqdm
 import wandb
 from sklearn.decomposition import PCA
@@ -23,7 +24,7 @@ from conrecon.dplearning.vae import SequenceToScalarVAE, SequenceToScalarVAE
 from conrecon.plotting import TrainLayout
 from conrecon.utils import create_logger, set_seeds
 from conrecon.validation_functions import calculate_validation_metrics
-from conrecon.performance_test_functions import test_entire_file, triv_test_entire_file, pca_test_entire_file
+from conrecon.performance_test_functions import vae_test_file, triv_test_entire_file, pca_test_entire_file
 
 traceback.install()
 
@@ -61,7 +62,7 @@ def argsies() -> argparse.Namespace:
         type=list,
         nargs="+",
     )
-    ap.add_argument("--kl_dig_hypr", default=0.1, type=float)
+    ap.add_argument("--kl_dig_hypr", "-k", default=0.01, type=float)
 
     ap.add_argument("--no-autoindent")
     ap.add_argument("--seed", default=0, type=int)
@@ -141,7 +142,7 @@ def plot_training_losses(recon_losses: List, adv_losses: List, fig_savedest: str
     plt.savefig(fig_savedest)
     plt.close()
 
-def train_v1(
+def train_vae_and_adversary(
     batch_size: int,
     prv_columns: List[int],
     data_columns: List[str],
@@ -209,10 +210,10 @@ def train_v1(
             latent_z, sanitized_data, _ = model_vae(batch_all)
 
             # Take Latent Features and Get Adversary Guess
-            adversary_guess_flat = model_adversary(latent_z)
+            adversary_guess_flat = model_adversary(latent_z).flatten()
 
             # Check on performance
-            batch_y_flat = batch_prv[:,-1,:].view(-1, batch_prv.shape[-1]) # Grab only last in sequeence
+            batch_y_flat = batch_prv[:,-1,:].view(-1, batch_prv.shape[-1]).flatten() # Grab only last in sequeence
             adv_train_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
             model_adversary.zero_grad()
             adv_train_loss.backward()
@@ -230,16 +231,15 @@ def train_v1(
             # Check on performance
             batch_y_flat = batch_prv[:,-1,:].view(-1, batch_prv.shape[-1])
             pub_recon_loss = F.mse_loss(sanitized_data[:, pub_columns], pub_prediction)
-            adv_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
-            final_loss_scalar = pub_recon_loss - 4.0 * adv_loss + kl_dig_hypr * kl_divergence.mean()
+            adver_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
+            final_loss_scalar = pub_recon_loss - 4.0 * adver_loss + kl_dig_hypr * kl_divergence.mean()
 
             recon_losses.append(pub_recon_loss.mean().item())
-            adv_losses.append(adv_loss.mean().item())
+            adv_losses.append(adver_loss.mean().item())
 
             model_vae.zero_grad()
             final_loss_scalar.backward()
             opt_vae.step()
-            # logger.info(f"Epoch {e} Batch {b} Recon Loss is {recon_loss} and Adversary Loss is {adv_loss}")
 
             if wandb_on:
                 wandb.log({
@@ -538,12 +538,12 @@ def main():
     logger.info(f"Using device is {device}")
 
     # Get Informaiton for the VAE
-    # vae_input = len(columns) - len(args.cols_to_hide)  # For when we want to send only the public ones
+    ########################################
+    # Setup up the models
+    ########################################
     vae_input_size = len(columns) # I think sending all of them is better
-    # pub_dimensions 
     # TODO: Get the model going
     model_vae = SequenceToScalarVAE(
-        # inout_size for model is output_dim for data
         input_size=vae_input_size,
         latent_size=args.vae_latent_size,
         hidden_size=args.vae_hidden_size,
@@ -561,37 +561,11 @@ def main():
     logger.debug(f"Columns are {columns}")
     logger.debug(f"Runs dict is {runs_dict}")
 
-    # TOREM: Move this lower down for when we are done with it. 
-    pca_model_adversary, retained_components = baseline_pca_decorrelation(
-        train_seqs,
-        val_seqs,
-        args.cols_to_hide,
-        args.batch_size,
-        args.correlation_threshold,
-        args.epochs,
-        args.lr,
-        device,
-    )
-    # Now we run the test on this 
-    pca_test_entire_file(
-        test_file,
-        args.cols_to_hide,
-        pca_model_adversary,
-        retained_components,
-        args.episode_length,
-        args.padding_value,
-        logger,
-        args.batch_size,
-        wandb_on=args.wandb
-    )
-    logger.info("Done with the PCA test")
-    exit() # TOREM:
-
     ########################################
     # Training VAE and Adversary
     ########################################
     logger.info("Starting the VAE Training")
-    model_vae, model_adversary, recon_losses, adv_losses = train_v1(
+    model_vae, model_adversary, recon_losses, adv_losses = train_vae_and_adversary(
         args.batch_size,
         args.cols_to_hide,
         columns,
@@ -604,14 +578,8 @@ def main():
         args.lr,
         args.kl_dig_hypr,
     )
-
-    ########################################
-    # Evaluation
-    ########################################
     plot_training_losses(recon_losses, adv_losses, f"./figures/new_data_vae/recon-adv_losses.png")
-
-    # TODO: Move this to a test 
-    metrics = test_entire_file(
+    metrics = vae_test_file(
         test_file,
         args.cols_to_hide,
         model_vae,
@@ -623,9 +591,9 @@ def main():
     )
     logger.info(f"Validation Metrics are {metrics}")
 
-    # Benchmarks: 
-
     ########################################
+    ## Benchmarks
+    #
     # Training Trivial Adversary
     ########################################
     trivial_adverary, adv_losses = baseline_trivial_correlation(
@@ -648,10 +616,36 @@ def main():
         wandb_on=args.wandb
     )
 
+    ########################################
+    # Training the PCA based baseline
+    ########################################
+    # TOREM: Move this lower down for when we are done with it. 
+    logger.info("Starting the PCA decorrelation and training")
+    pca_model_adversary, retained_components = baseline_pca_decorrelation(
+        train_seqs,
+        val_seqs,
+        args.cols_to_hide,
+        args.batch_size,
+        args.correlation_threshold,
+        args.epochs,
+        args.lr,
+        device,
+    )
+    logger.info("PCA training and decorrelation complete. Now testing...")
+    pca_test_entire_file(
+        test_file,
+        args.cols_to_hide,
+        pca_model_adversary,
+        retained_components,
+        args.episode_length,
+        args.padding_value,
+        logger,
+        args.batch_size,
+        wandb_on=args.wandb
+    )
+    logger.info("Done with the PCA test")
 
-    # kd_transform_baseline(test_runs, model_adversary)
-
-    # 🚩 development so far🚩
+    logger.info("All baselines complete. Exiting")
     exit()
 
 if __name__ == "__main__":
