@@ -25,6 +25,7 @@ from conrecon.plotting import TrainLayout
 from conrecon.utils import create_logger, set_seeds
 from conrecon.validation_functions import calculate_validation_metrics
 from conrecon.performance_test_functions import vae_test_file, triv_test_entire_file, pca_test_entire_file
+from conrecon.training_utils import train_vae_and_adversary
 
 traceback.install()
 
@@ -36,7 +37,7 @@ def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     # State stuff here
     ap.add_argument(
-        "-e", "--epochs", default=8, help="How many epochs to train for", type=int
+        "-e", "--epochs", default=50, help="How many epochs to train for", type=int
     )
     ap.add_argument(
         "--defacto_data_raw_path",
@@ -62,11 +63,11 @@ def argsies() -> argparse.Namespace:
         type=list,
         nargs="+",
     )
-    ap.add_argument("--kl_dig_hypr", "-k", default=0.01, type=float)
+    ap.add_argument("--kl_dig_hypr", "-k", default=0.1, type=float)
 
     ap.add_argument("--no-autoindent")
     ap.add_argument("--seed", default=0, type=int)
-    ap.add_argument("--lr", default=0.01, type=float)
+    ap.add_argument("--lr", default=0.005, type=float)
     ap.add_argument("--first_n_states", default=7, type=int)
     ap.add_argument("--adversary_hidden_size", default=32, type=int)
     ap.add_argument("--padding_value", default=-1, type=int)
@@ -115,6 +116,13 @@ def argsies() -> argparse.Namespace:
         type=float,
         help="The threshold for retaining principal components",
     )
+    ap.add_argument(
+        "--priv_utility_tradeoff_coeff",
+        # default=1.1,
+        default=4,
+        type=float,
+        help="The threshold for retaining principal components",
+    )
 
     args = ap.parse_args()
 
@@ -142,135 +150,6 @@ def plot_training_losses(recon_losses: List, adv_losses: List, fig_savedest: str
     plt.savefig(fig_savedest)
     plt.close()
 
-def train_vae_and_adversary(
-    batch_size: int,
-    prv_columns: List[int],
-    data_columns: List[str],
-    device: torch.device,
-    ds_train: Dict[str, np.ndarray],
-    ds_val: Dict[str, np.ndarray],
-    epochs: int,
-    model_vae: SequenceToScalarVAE,
-    model_adversary: Adversary,
-    learning_rate: float,
-    kl_dig_hypr: float,
-) -> Tuple[nn.Module, nn.Module, List, List]:
-    """
-    Training Loop
-        ds_train: np.ndarray (num_batches, batch_size, features),
-    """
-
-    pub_columns = list(set(range(len(data_columns))) - set(prv_columns))
-    device = next(model_vae.parameters()).device
-
-    # Configuring Optimizers
-    opt_adversary = torch.optim.Adam(model_adversary.parameters(), lr=learning_rate)  # type: ignore
-    opt_vae = torch.optim.Adam(model_vae.parameters(), lr=learning_rate)  # type: ignore
-
-    ##  A bit of extra processing of data. (Specific to this version of training)
-    # Information comes packed in dictionary elements for each file. We need to mix it up a bit
-    all_train_seqs = np.concatenate([ seqs for _, seqs in ds_train.items()], axis=0)
-    all_valid_seqs = np.concatenate([ seqs for _, seqs in ds_val.items()], axis=0)
-    # Shuffle, Batch, Torch Coversion, Feature Separation
-    np.random.shuffle(all_train_seqs)
-    np.random.shuffle(all_valid_seqs)
-    batch_amnt  = all_train_seqs.shape[0] // batch_size
-    # all_train_seqs = all_train_seqs.reshape(batch_amnt, batch_size, all_train_seqs.shape[-2], all_train_seqs.shape[-1])
-    # all_valid_seqs = all_valid_seqs.reshape(batch_amnt, batch_size, all_valid_seqs.shape[-2], all_valid_seqs.shape[-1])
-    all_train_seqs = torch.from_numpy(all_train_seqs).to(torch.float32).to(device)
-    all_valid_seqs = torch.from_numpy(all_valid_seqs).to(torch.float32).to(device)
-    train_pub = all_train_seqs[:,:,pub_columns]
-    train_prv = all_train_seqs[:,:,prv_columns]
-
-    num_batches     = ceil(all_train_seqs.shape[0] / batch_size)
-    sequence_len    = all_train_seqs.shape[1]
-
-    ########################################
-    # Get Batches
-    ########################################
-    logger.info(f"Working with {num_batches} num_batches, each with size:  {batch_size}, and sequence/episode length {sequence_len}")
-    recon_losses = []
-    adv_losses = []
-    for e in tqdm(range(epochs), desc="Epochs"):
-        logger.info(f"Epoch {e} of {epochs}")
-        for batch_no in tqdm(range(num_batches), desc="Batches"):
-            # Now Get the new VAE generations
-            batch_all = all_train_seqs[batch_no * batch_size : (batch_no + 1) * batch_size]
-            batch_pub = train_pub[batch_no * batch_size : (batch_no + 1) * batch_size]
-            batch_prv = train_prv[batch_no * batch_size : (batch_no + 1) * batch_size]
-            if batch_pub.shape[0] != batch_size:
-                continue
-
-            logger.info(f"Batch {batch_no} out of {num_batches} with shape {batch_pub.shape}")
-
-            ########################################
-            # 1. Get the adversary to guess the sensitive column
-            ########################################
-            # Get the latent features and sanitized data
-            latent_z, sanitized_data, _ = model_vae(batch_all)
-
-            # Take Latent Features and Get Adversary Guess
-            adversary_guess_flat = model_adversary(latent_z).flatten()
-
-            # Check on performance
-            batch_y_flat = batch_prv[:,-1,:].view(-1, batch_prv.shape[-1]).flatten() # Grab only last in sequeence
-            adv_train_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
-            model_adversary.zero_grad()
-            adv_train_loss.backward()
-            opt_adversary.step()
-
-            ########################################
-            # 2. Calculate the Recon Loss
-            ########################################
-            # Get the latent features and sanitized data
-            latent_z, sanitized_data, kl_divergence = model_vae(batch_all)
-            pub_prediction = batch_pub[:,-1,:]
-
-            # Take Latent Features and Get Adversary Guess
-            adversary_guess_flat = model_adversary(latent_z)
-            # Check on performance
-            batch_y_flat = batch_prv[:,-1,:].view(-1, batch_prv.shape[-1])
-            pub_recon_loss = F.mse_loss(sanitized_data[:, pub_columns], pub_prediction)
-            adver_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
-            final_loss_scalar = pub_recon_loss - 4.0 * adver_loss + kl_dig_hypr * kl_divergence.mean()
-
-            recon_losses.append(pub_recon_loss.mean().item())
-            adv_losses.append(adver_loss.mean().item())
-
-            model_vae.zero_grad()
-            final_loss_scalar.backward()
-            opt_vae.step()
-
-            if wandb_on:
-                wandb.log({
-                    "adv_train_loss": adv_train_loss.item(),
-                    "pub_recon_loss": pub_recon_loss.item(),
-                    "final_loss_scalar": final_loss_scalar.item(),
-                })
-
-            if batch_no % 16 == 0:
-                # TODO: Finish the validation implementaion with correlation
-                # - Log the validation metrics here
-                model_vae.eval()
-                model_adversary.eval()
-                with torch.no_grad():
-                    validation_metrics = (
-                        calculate_validation_metrics(
-                            all_valid_seqs,
-                            pub_columns,
-                            prv_columns,
-                            model_vae,
-                            model_adversary,
-                        )
-                    )
-                model_vae.train()
-                model_adversary.train()
-
-                # Report to wandb
-                if wandb_on:
-                    wandb.log(validation_metrics)
-
-    return model_vae, model_adversary, recon_losses, adv_losses
 
 
 # TODO: We need to implement federated learning in this particular part of the expression
@@ -405,6 +284,70 @@ def baseline_pca_decorrelation(
     return adversary, retained_components
 
 
+def pca_decomposition_w_heatmap(
+    ds_train: OrderedDict[str, np.ndarray],
+    ds_val: OrderedDict[str, np.ndarray],
+    prv_features_idxs: List[int],
+    batch_size: int,
+    correlation_threshold: float,
+    epochs: int,
+    lr: float,
+    device: torch.device,
+):
+    """
+    This will create a matrix M_{up} that will help us convert public components into private components.
+    """
+    pca = PCA()
+
+    first_key = list(ds_train.keys())[0]
+    num_features = ds_train[first_key].shape[-1]
+    pub_features_idxs = list(set(range(num_features)) - set(prv_features_idxs))
+    sequence_length = ds_train[first_key].shape[1]
+
+    # We need to concatenate the features as usual 
+    all_train_seqs = np.concatenate([ seqs for _, seqs in ds_train.items()], axis=0)
+    all_valid_seqs = np.concatenate([ seqs for _, seqs in ds_val.items()], axis=0)
+    # Shuffle, Batch, Torch Coversion, Feature Separation
+    
+    train_pub = all_train_seqs[:,:,pub_features_idxs]
+    train_prv = all_train_seqs[:,:,prv_features_idxs]
+
+    train_pub_flat = train_pub.reshape(-1, train_pub.shape[-1])
+    train_prv_flat = train_prv.reshape(-1, train_prv.shape[-1])
+    train_pub_centered = train_pub_flat - np.mean(train_pub_flat, axis=0)
+
+    #  Now we can start fitting the pca 
+    pca_transform = pca.fit(train_pub_flat)
+    # Shape is (num_components, num_features), fyi for indexing purposes
+    principal_components = pca_transform.components_
+    # Takes in (num_componets, num_features) and returns (num_components, num_samples)
+    C = train_pub_flat.dot(principal_components.T)
+
+    # The projection matrix from public to latent space
+    M_CP = pca.components_.T  # shape: (M, K)
+
+    # ----- Step 2: Solve for M_CU via linear regression -----
+    # We assume X_U \approx C @ M_CU
+    # M_CU has shape (K, N-M)
+    # Using np.linalg.lstsq to solve: M_CU = argmin ||C @ M - X_U||^2
+    M_CU, residuals, rank, s = np.linalg.lstsq(C, train_prv_flat, rcond=None)
+
+    # ----- (Optional) Directly check (C^T C) invertibility -----
+    # If C^T C is singular or near-singular, direct inversion is problematic
+    CtC = C.T @ C
+    # Attempt inversion (for demonstration; might fail if singular)
+    try:
+        CtC_inv = np.linalg.inv(CtC)
+        print("C^T C was invertible.")
+    except np.linalg.LinAlgError:
+        print("C^T C is singular or not well-conditioned.")
+
+    # ----- Step 3: Compute the final M_PU = M_CP @ M_CU -----
+    M_PU = M_CP @ M_CU  # shape: (M, N-M)
+
+    print("M_CP shape:", M_CP.shape)
+    print("M_CU shape:", M_CU.shape)
+    print("M_PU shape:", M_PU.shape)
 
 
 def baseline_trivial_correlation(
@@ -537,6 +480,21 @@ def main():
 
     logger.info(f"Using device is {device}")
 
+    ########################################
+    # What Stefano Wants
+    ########################################
+    meep = pca_decomposition_w_heatmap(
+        train_seqs,
+        val_seqs,
+        args.cols_to_hide,
+        args.batch_size,
+        args.correlation_threshold,
+        args.epochs,
+        args.lr,
+        device,
+    )
+    exit()
+
     # Get Informaiton for the VAE
     ########################################
     # Setup up the models
@@ -577,6 +535,9 @@ def main():
         model_adversary,
         args.lr,
         args.kl_dig_hypr,
+        args.wandb,
+        logger,
+        args.priv_utility_tradeoff_coeff,
     )
     plot_training_losses(recon_losses, adv_losses, f"./figures/new_data_vae/recon-adv_losses.png")
     metrics = vae_test_file(
