@@ -349,6 +349,41 @@ def pca_decomposition_w_heatmap(
     print("M_CU shape:", M_CU.shape)
     print("M_PU shape:", M_PU.shape)
 
+    ########################################
+    # Run Evaluation on test set
+    ########################################
+    # Now for validation
+    test_pub = test_file[:,pub_features_idxs]
+    test_prv = test_file[:,prv_features_idxs]
+    test_pub_centered = test_pub# - train_pub_mean
+    private_guess = test_pub_centered.dot(M_PU)
+
+    # Now we plot the results
+    plt.figure(figsize=(16,10))
+    plt.plot(private_guess.squeeze(), label="Reconstruction")
+    plt.plot(test_prv.squeeze(), label="Truth")
+    plt.title("PCA Reconstruction vs Truth")
+    plt.legend()
+    plt.savefig(f"./figures/mcu_reconstruction.png")
+    plt.close()
+
+
+    # We will now pass it through MPU
+
+    ########################################
+    # Plot the HeatMap
+    ########################################
+    fig, axs = plt.subplots(1, 1, figsize=(16,4))
+    im = axs.matshow(M_PU.T, cmap='viridis')
+    axs.set_title("$M_{PU}$: Public to Private Features HeatMap")
+    axs.set_xlabel("Public Features")
+    axs.set_ylabel("Private Features")
+    axs.set_yticks([])
+    plt.colorbar(im)
+    plt.savefig(f"./figures/pca_heatmap.png")
+    plt.close()
+
+
 
 def baseline_trivial_correlation(
     ds_train: OrderedDict[str, np.ndarray],
