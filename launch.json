@@ -5,12 +5,12 @@
       "type": "python",
       "host": "127.0.0.1",
       "request": "attach",
-      "port": 42020,
+      "port": 42022,
       "subProcess": true,
       "pathMappings": [
         {
           "localRoot": "${workspaceFolder}",
-          "remoteRoot": "/home/ottersome/data/privatecontrol"
+          "remoteRoot": "/root/workspace/privatecontrol"
         }
       ]
     }

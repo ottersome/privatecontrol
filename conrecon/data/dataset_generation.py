@@ -219,7 +219,9 @@ def collect_n_sequential_batches(
     
 
 
-def spot_backhistory(spot: int, sequence_len: int, run: np.ndarray, padding_value: int):
+def spot_backhistory(
+    spot: int, sequence_len: int, run: np.ndarray, padding_value: int
+) -> np.ndarray:
     """
     Args:
         spot: where the sampling will start from.

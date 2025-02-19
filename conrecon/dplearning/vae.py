@@ -456,10 +456,9 @@ class SequenceToScalarVAE(nn.Module):
     def __init__(
         self,
         input_size: int,
-        num_santiitzed_features: int,
+        num_sanitized_features: int,
         latent_size: int,
         hidden_size: int,
-        num_features_to_guess: int,
         rnn_num_layers: int = 1,
         rnn_hidden_size: int = 32,
     ):
@@ -478,11 +477,12 @@ class SequenceToScalarVAE(nn.Module):
         self.input_size = input_size
         self.latent_size = latent_size
         self.hidden_size = hidden_size
+        self.num_sanitized_features = num_sanitized_features
         self.fc1 = nn.Linear(rnn_hidden_size, hidden_size)
         self.fc21 = nn.Linear(hidden_size, latent_size)
         self.fc22 = nn.Linear(hidden_size, latent_size)
         self.fc3 = nn.Linear(latent_size, hidden_size)
-        self.fc4 = nn.Linear(hidden_size, num_santiitzed_features)
+        self.fc4 = nn.Linear(hidden_size, num_sanitized_features)
         self.logger = create_logger(__class__.__name__)
 
         self.relu = nn.ReLU()

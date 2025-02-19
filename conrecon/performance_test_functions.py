@@ -1,4 +1,4 @@
-from typing import Sequence, Dict
+from typing import Sequence, Dict, Tuple
 from math import ceil
 import logging
 
@@ -256,7 +256,7 @@ def vae_test_file(
         mod = i % 4
         idx = i // 4
         axs[mod,idx].plot(recon_to_show[:,i].squeeze().detach().cpu().numpy(), label="Reconstruction")
-        axs[mod,idx].set_title("Reconstruction Vs Truth")
+        axs[mod,idx].set_title(f"Reconstruction Vs Truth of $f_{some_8_idxs[i]}$")
         axs[mod,idx].legend()
         axs[mod,idx].plot(truth_to_compare[:,i].squeeze(), label="Truth")
         axs[mod,idx].legend()

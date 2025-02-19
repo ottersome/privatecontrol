@@ -95,7 +95,7 @@ def argsies() -> argparse.Namespace:
     )
     ap.add_argument(
         "--debug_port",
-        default=42020,
+        default=42022,
         type=int,
         help="Port to attach debugpy to listen to.",
     )
@@ -140,6 +140,7 @@ def compare_reconstruction():
     raise NotImplementedError
 
 def plot_training_losses(recon_losses: List, adv_losses: List, fig_savedest: str):
+    os.makedirs(os.path.dirname(fig_savedest), exist_ok=True)
     logger.info("Plotting the training losses")
     fig, axs = plt.subplots(1, 2, figsize=(16,10))
     axs[0].plot(recon_losses)

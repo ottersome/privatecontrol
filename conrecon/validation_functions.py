@@ -17,13 +17,13 @@ def calculate_validation_metrics(
     pub_features = all_features[:, :, pub_features_idxs]
 
     # Run data through models.
-    latent_z, sanitized_data, kl_divergence = model_vae(all_features)
-    recon_pub = sanitized_data[:, pub_features_idxs]
+    latent_z, sanitized_data, kl_divergence = model_vae(all_features[:,:-1,:]) # Do not leak the last element of sequence
+    recon_pub = sanitized_data
     recon_priv = model_adversary(latent_z)
 
     # Lets just do MSE for now
-    pub_mse = torch.mean((pub_features[:, -1, :] - recon_pub) ** 2)
-    prv_mse = torch.mean((prv_features[:, -1, :] - recon_priv) ** 2)
+    pub_mse = torch.mean((pub_features[:, -1, :].squeeze() - recon_pub) ** 2)
+    prv_mse = torch.mean((prv_features[:, -1, :].squeeze() - recon_priv) ** 2)
 
     # TODO: Do torch equivalent so we can get the correlation coefficient of the sequences predcicted
     # corr_pub = torch.corrcoef(pub_features[:, -1, :].flatten(), recon_pub.flatten())[0, 1]
