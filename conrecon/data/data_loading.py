@@ -159,7 +159,7 @@ def split_defacto_runs(
         run = sorted_run_dict[run_name]
         all_train.append(run)
         train_ds[run_name], val_ds[run_name], _  = randomly_pick_sequences_and_split(run, split_percentages, seq_length)
-    all_train.append(test_file)
+    all_train.append(test_file) # So we can scale the features
 
     all_train = np.concatenate(all_train)
 
@@ -188,6 +188,7 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
     # Create a list of files starting with `run_` inside of the path
     columns_so_far = []
     files = []
+    # These files do *NOT* include interpolation. Instead (I Think they have empty or zero elements)
     for ff in os.listdir(path):
         if ff.startswith("run_"):
             if len(columns_so_far)  == 0:
