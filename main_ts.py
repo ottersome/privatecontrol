@@ -25,7 +25,7 @@ from conrecon.plotting import TrainLayout
 from conrecon.utils import create_logger, set_seeds
 from conrecon.validation_functions import calculate_validation_metrics
 from conrecon.performance_test_functions import vae_test_file, triv_test_entire_file, pca_test_entire_file
-from conrecon.training_utils import train_vae_and_adversary
+from conrecon.training_utils import train_vae_and_adversary, train_vae_and_adversary_bi_level
 
 traceback.install()
 
@@ -39,13 +39,15 @@ def argsies() -> argparse.Namespace:
     ap.add_argument(
         "-e", "--epochs", default=50, help="How many epochs to train for", type=int
     )
+    ap.add_argument("--adversary_epochs", default=1, help="How many epochs to train advesrary for", type=int)
+    ap.add_argument("--adv_epoch_subsample_percent", default=1, help="How many epochs to train advesrary for", type=int)
     ap.add_argument(
         "--defacto_data_raw_path",
         default="./data/",
         type=str,
         help="Where to load the data from",
     )
-    ap.add_argument("--batch_size", default=64, type=int)
+    ap.add_argument("--batch_size", default=16, type=int)
     ap.add_argument("--rnn_num_layers", default=2, type=int)
     ap.add_argument("--rnn_hidden_size", default=15, type=int)
     ap.add_argument(
@@ -539,9 +541,9 @@ def main():
     # TODO: Get the model going
     model_vae = SequenceToScalarVAE(
         input_size=vae_input_size,
+        num_sanitized_features=num_public_cols,
         latent_size=args.vae_latent_size,
         hidden_size=args.vae_hidden_size,
-        num_features_to_guess=1,
         rnn_num_layers=args.rnn_num_layers,
         rnn_hidden_size=args.rnn_hidden_size,
     ).to(device)
@@ -559,7 +561,7 @@ def main():
     # Training VAE and Adversary
     ########################################
     logger.info("Starting the VAE Training")
-    model_vae, model_adversary, recon_losses, adv_losses = train_vae_and_adversary(
+    model_vae, model_adversary, recon_losses, adv_losses = train_vae_and_adversary_bi_level(
         args.batch_size,
         args.cols_to_hide,
         columns,
@@ -567,6 +569,8 @@ def main():
         train_seqs,
         val_seqs,
         args.epochs,
+        args.adversary_epochs,
+        args.adv_epoch_subsample_percent,
         model_vae,
         model_adversary,
         args.lr,
