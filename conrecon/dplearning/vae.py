@@ -532,8 +532,7 @@ class SequenceToScalarVAE(nn.Module):
         z = self.reparameterize(mu, logvar)
         var = torch.exp(logvar)
         # kl = 0.5 * (torch.pow(sigma,2) + torch.pow(mu,2) - torch.log(torch.pow(sigma,2)) - 1)
-        kl = 0.5 * (var + torch.pow(mu,2) - logvar - 1).reshape(x.shape[0], x.shape[1], -1)
-        kl = kl.sum(dim=-1)
+        kl = 0.5 * (var + torch.pow(mu,2) - logvar - 1).sum(-1)
         decoded = self.decode(z)
 
         return z,decoded, kl
