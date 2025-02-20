@@ -289,7 +289,7 @@ def baseline_pca_decorrelation(
 
 def pca_decomposition_w_heatmap(
     ds_train: OrderedDict[str, np.ndarray],
-    ds_val: OrderedDict[str, np.ndarray],
+    test_file: np.ndarray,
     prv_features_idxs: List[int],
     batch_size: int,
     correlation_threshold: float,
@@ -309,22 +309,21 @@ def pca_decomposition_w_heatmap(
 
     # We need to concatenate the features as usual 
     all_train_seqs = np.concatenate([ seqs for _, seqs in ds_train.items()], axis=0)
-    all_valid_seqs = np.concatenate([ seqs for _, seqs in ds_val.items()], axis=0)
     # Shuffle, Batch, Torch Coversion, Feature Separation
     
     train_pub = all_train_seqs[:,:,pub_features_idxs]
     train_prv = all_train_seqs[:,:,prv_features_idxs]
-
     train_pub_flat = train_pub.reshape(-1, train_pub.shape[-1])
     train_prv_flat = train_prv.reshape(-1, train_prv.shape[-1])
     train_pub_centered = train_pub_flat - np.mean(train_pub_flat, axis=0)
+    train_pub_mean = np.mean(train_pub_flat, axis=0)
 
     #  Now we can start fitting the pca 
-    pca_transform = pca.fit(train_pub_flat)
+    pca_transform = pca.fit(train_pub_centered)
     # Shape is (num_components, num_features), fyi for indexing purposes
     principal_components = pca_transform.components_
     # Takes in (num_componets, num_features) and returns (num_components, num_samples)
-    C = train_pub_flat.dot(principal_components.T)
+    C = train_pub_centered.dot(principal_components.T)
 
     # The projection matrix from public to latent space
     M_CP = pca.components_.T  # shape: (M, K)
@@ -358,7 +357,7 @@ def pca_decomposition_w_heatmap(
     # Now for validation
     test_pub = test_file[:,pub_features_idxs]
     test_prv = test_file[:,prv_features_idxs]
-    test_pub_centered = test_pub# - train_pub_mean
+    test_pub_centered = test_pub # - train_pub_mean
     private_guess = test_pub_centered.dot(M_PU)
 
     # Now we plot the results
@@ -506,6 +505,7 @@ def main():
     columns, runs_dict, debug_file = load_defacto_data(args.defacto_data_raw_path)
     num_columns = len(columns)
     num_private_cols = len(args.cols_to_hide)
+    num_public_cols = num_columns - num_private_cols
 
     # Separate them into their splits (and also interpolate)
     train_seqs, val_seqs, test_file = split_defacto_runs(
@@ -518,21 +518,20 @@ def main():
 
     logger.info(f"Using device is {device}")
 
-    ########################################
-    # What Stefano Wants
-    ########################################
-    meep = pca_decomposition_w_heatmap(
-        train_seqs,
-        val_seqs,
-        args.cols_to_hide,
-        args.batch_size,
-        args.correlation_threshold,
-        args.epochs,
-        args.lr,
-        device,
-    )
-    exit()
-
+    # ########################################
+    # # What Stefano Wants
+    # ########################################
+    # meep = pca_decomposition_w_heatmap(
+    #     train_seqs,
+    #     test_file,
+    #     args.cols_to_hide,
+    #     args.batch_size,
+    #     args.correlation_threshold,
+    #     args.epochs,
+    #     args.lr,
+    #     device,
+    # )
+    
     # Get Informaiton for the VAE
     ########################################
     # Setup up the models
