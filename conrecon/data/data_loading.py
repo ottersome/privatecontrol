@@ -121,6 +121,132 @@ def randomly_pick_sequences_and_split(run: np.ndarray, split_percentage: List[fl
     return train_seqs, val_seqs, np.array([])
 
 
+def randomly_pick_sequences_split_and_oversample(
+    run: np.ndarray,
+    split_percentage: List[float],
+    seq_len: int,
+    oversample_coefficient: float,
+    history_padding_value: float,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    # TODO: Add capacity for oversampling
+    """
+    Will split a run into train, validation and test
+    These two responsibilities are tightly coupled in my opinion.
+        You pick sequences without concerning yourself without how their split will be.
+    Returns: in Order: Train, Validation, Tests
+    """
+    assert sum(split_percentage) == 1, "Split Percentages should sum to 1"
+    assert (
+        len(split_percentage) == 2
+    ), "There should be two split_percentages"  # Test will remain our last file10
+    run_length = run.shape[0]
+    quotient = run_length // seq_len
+
+    amounts = int(quotient * oversample_coefficient)
+    validation_length = int(amounts * split_percentage[1])
+
+    random_ints = np.random.randint(0, run_length - 1, amounts)
+    triples = []
+    for r in random_ints:
+        # We are inclusive with the points
+        run_itself = spot_backhistory(r, seq_len, run, history_padding_value)
+        # TODO: Possibly remove the seconde elemnent as it might be useless
+        triples.append((r - run_length + 1, r, run_itself))
+
+    organized_triples = sorted(triples, key=lambda x: x[0])
+    removed_map = [False] * len(organized_triples)
+    len_triples = len(organized_triples)
+
+    # Now we sample from the triples
+    validation_sequences = []
+    can_take = lambda rand_spot, reach: all(
+        [
+            removed_map[rand_spot],
+            random.random() < 0.5 or rand_spot < reach,
+            rand_spot < len_triples,
+            len(validation_sequences) < validation_length,
+        ]
+    )
+    while len(validation_sequences) < validation_length:
+        random_spot = np.random.randint(0, len(organized_triples) - 1)
+        if not removed_map[random_spot]:
+
+            validation_sequences.append(organized_triples[random_spot][2])
+            # Now check if we can keep adding sequentially
+            removed_map[random_spot] = True
+
+
+            cur_spot = random_spot -1
+            reach = cur_spot - seq_len
+            print(".", sep="")
+            while organized_triples[cur_spot][1] > reach:
+
+            ## Take everything within overlap
+            while can_take(cur_spot, reach):
+                validation_sequences.append(organized_triples[cur_spot][2])
+                removed_map[cur_spot] = True
+                reach = cur_spot + seq_len
+                cur_spot += 1
+            print(
+                f"We have a total of {len(validation_sequences)}/{validation_length} elements"
+            )
+
+    # Now we stack
+    validation_sequences = np.stack(validation_sequences)
+    train_sequences = np.stack(
+        [
+            organized_triples[i][2]
+            for i, removed in enumerate(removed_map)
+            if not removed
+        ]
+    )
+
+    visualize_windows(validation_sequences, train_sequences)
+
+    print("Saved the windows")
+    exit()
+    return train_sequences, validation_sequences, np.array([])
+
+
+def visualize_windows(
+    validation_windows: np.ndarray,
+    training_windows: np.ndarray,
+    output_path: str = "./figures/debug_windows.png",
+):
+    """
+    Visualize validation and training windows with different colors.
+
+    Args:
+        validation_windows: numpy array of validation window sequences
+        training_windows: numpy array of training window sequences
+        output_path: path to save the output figure
+    """
+    plt.figure(figsize=(10, 6))
+
+    # Plot validation windows in red
+    for seq_no in range(validation_windows.shape[0]):
+        times = validation_windows[seq_no, :, 0]
+        random_y = np.full_like(times, random.random())
+        plt.plot(times, random_y, color="r", alpha=0.5, label="Validation")
+
+    # Plot training windows in blue
+    for seq_no in range(training_windows.shape[0]):
+        times = training_windows[seq_no, :, 0]
+        random_y = np.full_like(times, random.random())
+        plt.plot(times, random_y, color="b", alpha=0.5, label="Training")
+
+    # Remove duplicate labels
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    plt.legend(by_label.values(), by_label.keys())
+
+    # Create output directory if it doesn't exist
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    plt.savefig(output_path)
+    plt.close()
+
+
 def split_defacto_runs(
     run_dict: OrderedDict[str, np.ndarray], 
     train_split: float,
