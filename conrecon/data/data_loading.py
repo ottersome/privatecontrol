@@ -1,5 +1,6 @@
+import random
 import pandas as pd
-from typing import List, DefaultDict, OrderedDict
+from typing import List, DefaultDict, OrderedDict, Set
 import pdb
 import itertools
 import os
@@ -9,6 +10,8 @@ from sklearn.impute import KNNImputer
 from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
 import re
+
+from conrecon.data.dataset_generation import spot_backhistory
 
 def load_runs(path: str) -> OrderedDict[str, pd.DataFrame]:
     """
@@ -120,13 +123,57 @@ def randomly_pick_sequences_and_split(run: np.ndarray, split_percentage: List[fl
 
     return train_seqs, val_seqs, np.array([])
 
+def space_divisor(space_size: int, min_window_size: int, num_chunks: int) -> List[int]:
+
+    assert space_size / min_window_size >= num_chunks, f"Space of size {space_size} cannot be divided into {num_chunks} chunks whilst keeping a minimum window size of {min_window_size}"
+
+    chunks = [min_window_size] * num_chunks 
+    space_remaining = space_size - min_window_size * num_chunks 
+
+    budget = space_remaining
+
+    for i in range(num_chunks-1):
+        to_add = random.randint(0,budget)
+        chunks[i] = chunks[i] + to_add
+        budget -= to_add
+
+    chunks[-1] += budget
+    random.shuffle(chunks)
+    return chunks
+
+
+def cast_chunks(total_space: int, chunks: list, min_width: int) -> List[Tuple[int, int]]:
+    """
+    Randomly casts the given chunks into a larger space, ensuring spacing between chunks
+    is at least min_width.
+    """
+    assert sum(chunks) + (len(chunks) - 1) * min_width <= total_space, "Not enough space to ensure min_width gaps."
+    
+    positions = []
+    remaining_space = total_space - sum(chunks)
+    num_gaps = len(chunks) - 1
+    gap_sizes = [min_width] * num_gaps  # Start with minimum gaps
+    
+    remaining_space -= sum(gap_sizes)
+    
+    for i in range(num_gaps):
+        max_addable = remaining_space if remaining_space > 0 else 0
+        add_size = random.randint(0, max_addable)
+        gap_sizes[i] += add_size
+        remaining_space -= add_size
+    
+    current_pos = 0
+    for chunk, gap in zip(chunks, gap_sizes + [0]):
+        positions.append((current_pos, current_pos + chunk))
+        current_pos += chunk + gap
+    
+    return positions
 
 def randomly_pick_sequences_split_and_oversample(
     run: np.ndarray,
     split_percentage: List[float],
     seq_len: int,
     oversample_coefficient: float,
-    history_padding_value: float,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     # TODO: Add capacity for oversampling
     """
@@ -143,68 +190,60 @@ def randomly_pick_sequences_split_and_oversample(
     quotient = run_length // seq_len
 
     amounts = int(quotient * oversample_coefficient)
-    validation_length = int(amounts * split_percentage[1])
+    train_amount = int(amounts * split_percentage[0])
+    val_amount = int(amounts * split_percentage[1])
+    validation_amount = int(amounts * split_percentage[1])
 
-    random_ints = np.random.randint(0, run_length - 1, amounts)
-    triples = []
-    for r in random_ints:
-        # We are inclusive with the points
-        run_itself = spot_backhistory(r, seq_len, run, history_padding_value)
-        # TODO: Possibly remove the seconde elemnent as it might be useless
-        triples.append((r - run_length + 1, r, run_itself))
+    validation_window_length = int(run_length * split_percentage[1])
 
-    organized_triples = sorted(triples, key=lambda x: x[0])
-    removed_map = [False] * len(organized_triples)
-    len_triples = len(organized_triples)
+    # We shall simply chose how to divide the validation length such that our tiniest still holds atleast seq_len 
+    num_chunks = 5 # TODO: fix the hardcode 
 
-    # Now we sample from the triples
+    val_chunks = space_divisor(validation_window_length, seq_len, num_chunks)
+    val_chunks_positions = cast_chunks(run_length, val_chunks, seq_len)
+
+    # Now we decide a chunk at random 
     validation_sequences = []
-    can_take = lambda rand_spot, reach: all(
-        [
-            removed_map[rand_spot],
-            random.random() < 0.5 or rand_spot < reach,
-            rand_spot < len_triples,
-            len(validation_sequences) < validation_length,
-        ]
-    )
-    while len(validation_sequences) < validation_length:
-        random_spot = np.random.randint(0, len(organized_triples) - 1)
-        if not removed_map[random_spot]:
-
-            validation_sequences.append(organized_triples[random_spot][2])
-            # Now check if we can keep adding sequentially
-            removed_map[random_spot] = True
+    for val_selection in range(validation_amount):
+        # Select chunk at random 
+        chunk_idx = np.random.randint(0, len(val_chunks_positions))
+        chunk_start, chunk_end = val_chunks_positions[chunk_idx]
+        # Select spot at random 
+        spot_idx = np.random.randint(chunk_start+seq_len, chunk_end+1)
+        # spot = spot_idx - run_length + 1 # WERID ?
+        run_itself = spot_backhistory(spot_idx, seq_len, run, padding_value=-1)
+        validation_sequences.append(run_itself)
 
 
-            cur_spot = random_spot -1
-            reach = cur_spot - seq_len
-            print(".", sep="")
-            while organized_triples[cur_spot][1] > reach:
+    ##  Now get chunk idxs out of chunks
+    # Convert chunks endpoints to sets and remove from the larger set
+    val_chunks_idxs: Set[int] = set()
+    for chunk_start, chunk_end in val_chunks_positions:
+        val_chunks_idxs |= set(range(chunk_start, chunk_end))
+    all_set = set(range(run_length))
+    train_idxs = all_set - val_chunks_idxs
+    # Now we remove those that 
+    useable_train_idxs = []
+    for idx in train_idxs:
+        if idx-seq_len in train_idxs:
+            useable_train_idxs.append(idx)
 
-            ## Take everything within overlap
-            while can_take(cur_spot, reach):
-                validation_sequences.append(organized_triples[cur_spot][2])
-                removed_map[cur_spot] = True
-                reach = cur_spot + seq_len
-                cur_spot += 1
-            print(
-                f"We have a total of {len(validation_sequences)}/{validation_length} elements"
-            )
+    # Once that is done we start selecting just like before
+    train_sequences = []
+    for train_selection in range(train_amount):
+        # Select chunk at random 
+        spot = np.random.choice(useable_train_idxs, 1)[0]
+        run_itself = spot_backhistory(spot, seq_len, run, padding_value=-1)
+        train_sequences.append(run_itself)
 
-    # Now we stack
+    ### 🏇🏇 ###
+
     validation_sequences = np.stack(validation_sequences)
-    train_sequences = np.stack(
-        [
-            organized_triples[i][2]
-            for i, removed in enumerate(removed_map)
-            if not removed
-        ]
-    )
+    train_sequences = np.stack(train_sequences)
 
-    visualize_windows(validation_sequences, train_sequences)
+    # NICE Tool for debigging. Might be useful later so I leave it here.
+    # visualize_windows(validation_sequences, train_sequences)
 
-    print("Saved the windows")
-    exit()
     return train_sequences, validation_sequences, np.array([])
 
 
@@ -320,7 +359,7 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
         if ff.startswith("run_"):
             if len(columns_so_far)  == 0:
                 # columns_so_far = pd.read_csv(os.path.join(path, ff), index_col=0, header=0).columns.values
-                columns_so_far = pd.read_csv(os.path.join(path, ff), header=0).columns.values
+                columns_so_far: List[str] = pd.read_csv(os.path.join(path, ff), header=0).columns.values.tolist()
                 # Impute them if need be 
             else:
                 if set(columns_so_far) != set(pd.read_csv(os.path.join(path, ff), header=0).columns):
@@ -345,9 +384,9 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
         df.dropna(inplace=True)
         obtained_runs[f] = df.values # NOTE: Confirm this doing what we expect it to 
 
-    assert isinstance(debug_file, pd.DataFrame)
+    assert isinstance(test_file, pd.DataFrame)
     # Let me see how it looks
-    return columns_so_far, obtained_runs, debug_file
+    return columns_so_far, obtained_runs, test_file
 
 
 def new_format(path: str, features_per_run: int = 15):

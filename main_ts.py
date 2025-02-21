@@ -125,6 +125,12 @@ def argsies() -> argparse.Namespace:
         type=float,
         help="The threshold for retaining principal components",
     )
+    ap.add_argument(
+        "--oversample_coefficient",
+        default=1.6,
+        type=float,
+        help="The threshold for retaining principal components",
+    )
 
     args = ap.parse_args()
 
@@ -513,6 +519,7 @@ def main():
         args.splits["train_split"],
         args.splits["val_split"],
         args.episode_length,
+        args.oversample_coefficient,
         True, # Scale
     )
 

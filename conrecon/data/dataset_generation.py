@@ -230,6 +230,7 @@ def spot_backhistory(
     sequence_so_far = run[: spot + 1, :]  # Inclusive
     sequence_so_far = sequence_so_far[-sequence_len:, :]
     if (spot - sequence_len + 1) < 0:
+        raise RuntimeError("Spot is too far back. We are disabling this feature for now")
         # Then we have to add padding:
         padding_amnt = sequence_len - sequence_so_far.shape[0]
         padding = np.full((padding_amnt, sequence_so_far.shape[1]), padding_value)
