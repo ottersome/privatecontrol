@@ -252,6 +252,7 @@ def split_defacto_runs(
     train_split: float,
     val_split: float,
     seq_length: int, 
+    oversample_coefficient: float,
     scale: bool = True,
 ) -> Tuple[OrderedDict[str, np.ndarray], OrderedDict[str, np.ndarray], np.ndarray]:
     """
@@ -267,7 +268,7 @@ def split_defacto_runs(
     train_ds = OrderedDict()
     val_ds = OrderedDict()
 
-    split_percentages = [train_split, val_split, 0]
+    split_percentages = [train_split, val_split]
 
     # Order (perhaps not necessary run_dict)
     sorted_run_dict = dict(
@@ -284,7 +285,7 @@ def split_defacto_runs(
     for run_name in sorted_run_dict.keys():
         run = sorted_run_dict[run_name]
         all_train.append(run)
-        train_ds[run_name], val_ds[run_name], _  = randomly_pick_sequences_and_split(run, split_percentages, seq_length)
+        train_ds[run_name], val_ds[run_name], _  = randomly_pick_sequences_split_and_oversample(run, split_percentages, seq_length, oversample_coefficient)
     all_train.append(test_file) # So we can scale the features
 
     all_train = np.concatenate(all_train)
