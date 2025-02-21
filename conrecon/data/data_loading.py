@@ -192,16 +192,17 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
     for ff in os.listdir(path):
         if ff.startswith("run_"):
             if len(columns_so_far)  == 0:
-                columns_so_far = pd.read_csv(os.path.join(path, ff), index_col=0, header=0).columns.values
+                # columns_so_far = pd.read_csv(os.path.join(path, ff), index_col=0, header=0).columns.values
+                columns_so_far = pd.read_csv(os.path.join(path, ff), header=0).columns.values
                 # Impute them if need be 
             else:
-                if set(columns_so_far) != set(pd.read_csv(os.path.join(path, ff), index_col=0, header=0).columns):
+                if set(columns_so_far) != set(pd.read_csv(os.path.join(path, ff), header=0).columns):
                     raise ValueError("Columns are not the same for all runs")
             files.append(ff)
 
     # Organize them by number after the run_
-    debug_file = files[-1]
-    debug_file = pd.read_csv(os.path.join(path,debug_file), index_col=0,header=0)
+    test_file = files[-1]
+    test_file = pd.read_csv(os.path.join(path,test_file), header=0)
     files = files[:-1]
     sorted_files = sorted(files, key=lambda x: int(x.split(".")[0].split("run_")[1]))
     obtained_runs = OrderedDict({ f_name : np.ndarray([]) for f_name in sorted_files })
@@ -211,7 +212,7 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
     # Now we start forming a 
     for f in sorted_files:
         print(f"Loading run: run {f}")
-        df = pd.read_csv(os.path.join(path,f), index_col=0, header=0)
+        df = pd.read_csv(os.path.join(path,f), header=0)
         df.interpolate(inplace=True)
         # Even after interpolation we might still get initial problems witht the row:
         df.dropna(inplace=True)
