@@ -1,3 +1,4 @@
+import os
 from typing import Sequence, Dict, Tuple
 from math import ceil
 import logging
@@ -224,6 +225,7 @@ def vae_test_file(
 
     batch_guesses = []
     batch_reconstructions = []
+    latent_zs = []
     for batch_no in range(num_batches):
         ########################################
         # Sanitize the data
@@ -238,16 +240,30 @@ def vae_test_file(
         adversary_guess = model_adversary(latent_z)
         batch_guesses.append(adversary_guess)
         batch_reconstructions.append(sanitized_data)
+        latent_zs.append(latent_z)
 
+    ########################################
+    # Dump data to play with it later.
+    ########################################
     seq_guesses = torch.cat(batch_guesses, dim=0)
     seq_reconstructions = torch.cat(batch_reconstructions, dim=0)
+    seq_latent_zs = torch.cat(latent_zs, dim=0)
 
-    # Lets now save the figure
-    some_8_idxs = np.random.randint(0, seq_reconstructions.shape[1], 8)
+    tosave_val_x = val_x.cpu().numpy()
+    tosave_latent_zs = seq_latent_zs.cpu().numpy()
+    tosave_sanitized_data = batch_reconstructions[0].cpu().numpy()
+    os.makedirs("./results/", exist_ok=True)
+    np.save(f"./results/val_x_{idxs_colsToGuess}.npy", tosave_val_x)
+    np.save(f"./results/latent_z_{idxs_colsToGuess}.npy", tosave_latent_zs) 
+    np.save(f"./results/sanitized_data_{idxs_colsToGuess}.npy", tosave_sanitized_data)
 
     ########################################
     # Chart For Reconstruction
     ########################################
+
+    # Lets now save the figure
+    some_8_idxs = np.random.randint(0, seq_reconstructions.shape[1], 8)
+
     recon_to_show = seq_reconstructions[:, some_8_idxs]
     truth_to_compare = test_file[:, some_8_idxs]
     fig,axs = plt.subplots(4,2,figsize=(32,20))
