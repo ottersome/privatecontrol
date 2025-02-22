@@ -220,8 +220,7 @@ def vae_test_file(
     # Generate the reconstruction
     public_columns = list(set(range(val_x.shape[-1])) - set(idxs_colsToGuess))
     private_columns = list(idxs_colsToGuess)
-    num_columns = len(public_columns) + len(private_columns)
-    num_batches = ceil(len(val_x) / batch_size)
+    num_batches = ceil((len(val_x) - sequence_length) / batch_size) ## Subtract sequence_length to avoid padding
 
     batch_guesses = []
     batch_reconstructions = []

@@ -57,7 +57,6 @@ def argsies() -> argparse.Namespace:
     )  # Remember 0-index (so 5th)
     ap.add_argument("--vae_latent_size", default=32, type=int)
     ap.add_argument("--episode_length", default=32, type=int)
-    ap.add_argument("--episode_gap", default=3, type=int)
     ap.add_argument("--vae_hidden_size", default=32, type=int)
     ap.add_argument(
         "--splits",
