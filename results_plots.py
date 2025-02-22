@@ -94,9 +94,10 @@ def main(args: argparse.Namespace):
     print(f"guesses data size {guesses.shape}")
     print(f"latent_z data size {latent_z.shape}")
 
-    plot_signal_reconstructions(original, sanitized, ids=[0,1,2,3,4,5,6,7,8,9])
     priv_col = 5
     public_feats = list(set(range(original.shape[-1])) - {priv_col})
+    
+    plot_signal_reconstructions(original[:,public_feats], sanitized, ids=[0,1,2,3,4,5,6,7,8,9])
     print(f"Public columns {public_feats}")
 
     
