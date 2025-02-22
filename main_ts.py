@@ -37,7 +37,7 @@ def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     # State stuff here
     ap.add_argument(
-        "-e", "--epochs", default=50, help="How many epochs to train for", type=int
+        "-e", "--epochs", default=100, help="How many epochs to train for", type=int
     )
     ap.add_argument("--adversary_epochs", default=1, help="How many epochs to train advesrary for", type=int)
     ap.add_argument("--adv_epoch_subsample_percent", default=1, help="How many epochs to train advesrary for", type=int)
@@ -52,7 +52,7 @@ def argsies() -> argparse.Namespace:
     ap.add_argument("--rnn_hidden_size", default=15, type=int)
     ap.add_argument(
         "--cols_to_hide",
-        default=[4],
+        default=[5],
         help="Which are the columsn we want no information of",
     )  # Remember 0-index (so 5th)
     ap.add_argument("--vae_latent_size", default=32, type=int)
@@ -64,11 +64,11 @@ def argsies() -> argparse.Namespace:
         type=list,
         nargs="+",
     )
-    ap.add_argument("--kl_dig_hypr", "-k", default=0.1, type=float)
+    ap.add_argument("--kl_dig_hypr", "-k", default=0.00001, type=float)
 
     ap.add_argument("--no-autoindent")
     ap.add_argument("--seed", default=0, type=int)
-    ap.add_argument("--lr", default=0.005, type=float)
+    ap.add_argument("--lr", default=0.001, type=float)
     ap.add_argument("--first_n_states", default=7, type=int)
     ap.add_argument("--adversary_hidden_size", default=32, type=int)
     ap.add_argument("--padding_value", default=-1, type=int)
@@ -119,8 +119,8 @@ def argsies() -> argparse.Namespace:
     )
     ap.add_argument(
         "--priv_utility_tradeoff_coeff",
-        # default=1.1,
-        default=4,
+        default=1.1,
+        # default=4,
         type=float,
         help="The threshold for retaining principal components",
     )

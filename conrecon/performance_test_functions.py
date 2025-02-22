@@ -41,7 +41,7 @@ def triv_test_entire_file(
     public_columns = list(set(range(val_x.shape[-1])) - set(idxs_colsToGuess))
     private_columns = list(idxs_colsToGuess)
     num_columns = len(public_columns) + len(private_columns)
-    num_batches = ceil(len(val_x) / batch_size)
+    num_batches = ceil((len(val_x) - sequence_length) / batch_size)
 
     batch_guesses = []
     batch_reconstructions = []
@@ -49,8 +49,8 @@ def triv_test_entire_file(
         ########################################
         # Sanitize the data
         ########################################
-        start_idx = batch_no * batch_size
-        end_idx = min((batch_no + 1) * batch_size, val_x.shape[0])
+        start_idx = batch_no * batch_size + sequence_length
+        end_idx = min((batch_no + 1) * batch_size + sequence_length, val_x.shape[0])
         backhistory = collect_n_sequential_batches(val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)
         backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
         backhistory_pub = backhistory[:,:,pub_features_idxs]
@@ -115,7 +115,7 @@ def pca_test_entire_file(
     val_x = torch.from_numpy(test_file).to(torch.float32).to(device)
     pub_features_idxs = list(set(range(amnt_columns)) - set(prv_features_idxs))
 
-    num_batches = ceil(len(val_x) / batch_size)
+    num_batches = ceil((len(val_x) - sequence_length) / batch_size)
 
     batch_guesses = []
     batch_reconstructions = []
@@ -125,8 +125,8 @@ def pca_test_entire_file(
         # Sanitize the data
         ########################################
         logger.info(f"Batch {batch_no} out of {num_batches}")
-        start_idx = batch_no * batch_size
-        end_idx = min((batch_no + 1) * batch_size, val_x.shape[0])
+        start_idx = batch_no * batch_size + sequence_length
+        end_idx = min((batch_no + 1) * batch_size + sequence_length, val_x.shape[0]) 
         backhistory = collect_n_sequential_batches(val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)[:,:,pub_features_idxs]
         projected_backhistory = backhistory.dot(principal_components.T)
         projected_backhistory = torch.from_numpy(projected_backhistory).to(torch.float32).to(device)
@@ -228,8 +228,8 @@ def vae_test_file(
         ########################################
         # Sanitize the data
         ########################################
-        start_idx = batch_no * batch_size
-        end_idx = min((batch_no + 1) * batch_size, val_x.shape[0])
+        start_idx = batch_no * batch_size + sequence_length #  Sequence length to avoid padding
+        end_idx = min((batch_no + 1) * batch_size + sequence_length, val_x.shape[0])
         backhistory = collect_n_sequential_batches(val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)
         backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
         latent_z, sanitized_data, kl_divergence = model_vae(backhistory)
