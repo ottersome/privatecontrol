@@ -94,10 +94,22 @@ def main(args: argparse.Namespace):
     print(f"guesses data size {guesses.shape}")
     print(f"latent_z data size {latent_z.shape}")
 
-    plot_signal_reconstructions(original, sanitized, ids=[0,1,2,3,4,5,6,7,8,9])
     priv_col = 5
     public_feats = list(set(range(original.shape[-1])) - {priv_col})
-    print(f"Public columns {public_feats}")
+    private_feats= [priv_col]
+    
+    # Plot the sanitized
+    plot_signal_reconstructions(
+        original[:, public_feats],
+        sanitized,
+        "figures/sanitized_signal_reconstructions.png",
+        ids=[6, 7],
+    )
+
+    # Plot the adversary guesses
+    plot_signal_reconstructions(
+        original[:, private_feats], guesses, "figures/adversary_guesses.png"
+    )
 
     
     # Compute correlations
@@ -108,14 +120,21 @@ def main(args: argparse.Namespace):
     original_pca, sanitized_pca = perform_pca(original, sanitized, n_components=2)
     plot_pca(original_pca, sanitized_pca)
 
-def plot_signal_reconstructions(original, sanitized, ids=None):
+def plot_signal_reconstructions(original, sanitized, save_name: str, ids=None):
     """Plot signal reconstructions using Seaborn with a clean look."""
+    print(f"original data size {original.shape}")
+    print(f"sanitized data size {sanitized.shape}")
     num_signals = original.shape[1] if ids is None else len(ids)
     cols = int(np.ceil(np.sqrt(num_signals)))
     rows = int(np.ceil(num_signals / cols))
+
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4))
     
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 3))
-    axes = axes.flatten()
+    # Convert axes to array and flatten
+    if rows == 1 and cols == 1:
+        axes = np.array([axes])
+    else:
+        axes = axes.flatten()
     
     for i, ax in enumerate(axes[:num_signals]):
         idx = i if ids is None else ids[i]
@@ -125,8 +144,8 @@ def plot_signal_reconstructions(original, sanitized, ids=None):
         ax.legend()
     
     plt.tight_layout()
-    plt.show()
-
+    plt.savefig(save_name, dpi=300)
+    plt.close()
     
 if __name__ == "__main__":
 
