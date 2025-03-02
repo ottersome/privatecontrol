@@ -67,7 +67,7 @@ def plot_correlation_distributions(pearson_corrs, spearman_corrs, save_dist: str
     plt.title(title)
     plt.legend()
     plt.savefig(save_dist, dpi=300)
-    plt.show()
+    # plt.show()
 
 def perform_pca(original, sanitized, n_components=2):
     """Perform PCA on original and sanitized data."""
@@ -113,6 +113,23 @@ def plot_all(features: np.ndarray, idxs: List[int], fig_name: str):
         plt.subplot(4, 4, current_idx+1)
         plt.plot(features[:, i])
         plt.title(f"Feature {i}")
+        plt.xlabel("Step")
+        plt.ylabel("Value")
+    plt.savefig(f"figures/{fig_name}.png")
+    plt.close()
+
+def plot_comp(features_og: np.ndarray, features_san: np.ndarray, idxs: List[int], fig_name: str):
+    plt.figure(figsize=(32,16))
+    plt.tight_layout()
+    san_counter = 0
+    for i in range(features_og.shape[-1]):
+        plt.subplot(4,4,i+1)
+        plt.plot(features_og[:,i], )
+        if i in idxs:
+            plt.plot(features_san[:,san_counter], label="Sanitized", alpha=0.7)
+            san_counter += 1
+        plt.legend()
+        plt.title(f"Feature {i}")
         plt.xlabel("Time")
         plt.ylabel("Value")
     plt.savefig(f"figures/{fig_name}.png")
@@ -145,6 +162,7 @@ def main(args: argparse.Namespace):
 
     none_idxs = [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     plot_all(sanitized, none_idxs, "Sanitized")
+    plot_comp(original, sanitized, none_idxs, "Comparison")
     
 
     # Plot the sanitized

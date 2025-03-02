@@ -39,15 +39,15 @@ def argsies() -> argparse.Namespace:
     ap.add_argument(
         "-e", "--epochs", default=100, help="How many epochs to train for", type=int
     )
-    ap.add_argument("--adversary_epochs", default=1, help="How many epochs to train advesrary for", type=int)
-    ap.add_argument("--adv_epoch_subsample_percent", default=1, help="How many epochs to train advesrary for", type=int)
+    ap.add_argument("--adversary_epochs", default=3, help="How many epochs to train advesrary for", type=int)
+    ap.add_argument("--adv_epoch_subsample_percent", default=1.8, help="How many epochs to train advesrary for", type=int)
     ap.add_argument(
         "--defacto_data_raw_path",
         default="./data/",
         type=str,
         help="Where to load the data from",
     )
-    ap.add_argument("--batch_size", default=16, type=int)
+    ap.add_argument("--batch_size", default=64, type=int)
     ap.add_argument("--rnn_num_layers", default=2, type=int)
     ap.add_argument("--rnn_hidden_size", default=15, type=int)
     ap.add_argument(
@@ -149,7 +149,8 @@ def compare_reconstruction():
 def plot_training_losses(recon_losses: List, adv_losses: List, fig_savedest: str):
     os.makedirs(os.path.dirname(fig_savedest), exist_ok=True)
     logger.info("Plotting the training losses")
-    fig, axs = plt.subplots(1, 2, figsize=(16,10))
+    fig, axs = plt.subplots(2, 1,  figsize=(16,10))
+    plt.tight_layout()
     axs[0].plot(recon_losses)
     axs[0].set_title("Reconstruction Loss")
     axs[1].plot(adv_losses)
@@ -158,6 +159,15 @@ def plot_training_losses(recon_losses: List, adv_losses: List, fig_savedest: str
     plt.savefig(fig_savedest)
     plt.close()
 
+def plot_single_loss(single_loss: List, title: str, fig_savedest: str):
+    os.makedirs(os.path.dirname(fig_savedest), exist_ok=True)
+    logger.info(f"Saving figure to {fig_savedest}")
+    _, axs = plt.subplots(1,1, figsize=(16, 8))
+    plt.tight_layout()
+    axs.plot(single_loss)
+    axs.set_title(title)
+    plt.savefig(fig_savedest)
+    plt.close()
 
 
 # TODO: We need to implement federated learning in this particular part of the expression
@@ -607,6 +617,7 @@ def main():
         test_file,
         device,
     )
+    plot_single_loss(adv_losses, "Trivial Adversary Losses", "./figures/new_data_vae/trivial-adv_losses.png")
     triv_test_entire_file(
         test_file,
         args.cols_to_hide,
