@@ -82,7 +82,6 @@ def train_vae_and_adversary(
     recon_losses = []
     adv_losses = []
     for e in tqdm(range(epochs), desc="Epochs"):
-        logger.info(f"Epoch {e} of {epochs}")
         for batch_no in tqdm(range(num_batches), desc="Batches"):
             # Now Get the new VAE generations
             batch_all = all_train_seqs[
@@ -93,9 +92,9 @@ def train_vae_and_adversary(
             if batch_pub.shape[0] != batch_size:
                 continue
 
-            logger.info(
-                f"Batch {batch_no} out of {num_batches} with shape {batch_pub.shape}"
-            )
+            # logger.info(
+            #     f"Batch {batch_no} out of {num_batches} with shape {batch_pub.shape}"
+            # )
 
             ########################################
             # 1. Get the adversary to guess the sensitive column
@@ -280,7 +279,6 @@ def train_vae_and_adversary_bi_level(
     recon_losses = []
     adv_losses = []
     for e in tqdm(range(epochs), desc="Epochs"):
-        logger.info(f"Epoch {e} of {inner_epochs}")
         for batch_no in tqdm(range(num_batches), desc="Batches"):
 
             # Now Get the new VAE generations
@@ -291,10 +289,6 @@ def train_vae_and_adversary_bi_level(
             batch_prv = train_prv[batch_no * batch_size : (batch_no + 1) * batch_size]
             if batch_pub.shape[0] != batch_size:
                 continue
-
-            logger.info(
-                f"Batch {batch_no} out of {num_batches} with shape {batch_pub.shape}"
-            )
 
             ########################################
             # 1. Get the adversary to guess the sensitive column

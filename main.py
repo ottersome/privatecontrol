@@ -271,7 +271,6 @@ def train_v0(
     recon_losses = []
     d_sanitized_dist = []
     for e in range(epochs):
-        logger.info(f"Epoch {e} of {epochs}")
         # losses_for_dist = []
         for b in range(batches):
             # Now Get the new VAE generations

@@ -125,7 +125,6 @@ def pca_test_entire_file(
         ########################################
         # Sanitize the data
         ########################################
-        logger.info(f"Batch {batch_no} out of {num_batches}")
         start_idx = batch_no * batch_size + sequence_length
         end_idx = min((batch_no + 1) * batch_size + sequence_length, val_x.shape[0]) 
         backhistory = collect_n_sequential_batches(val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)[:,:,pub_features_idxs]

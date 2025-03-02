@@ -1,3 +1,5 @@
+from typing import List, Tuple
+
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -15,12 +17,16 @@ def argsies() -> argparse.Namespace:
     )
     return ap.parse_args()
 
-def load_data(original_path, sanitized_path, guesses_path, latent_z_path):
+
+def load_data(
+    original_path, sanitized_path, guesses_path, latent_z_path
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Load original and sanitized npy data."""
     original = np.load(original_path)
     sanitized = np.load(sanitized_path)
     guesses = np.load(guesses_path)
     latent_z = np.load(latent_z_path)
+
     return original, sanitized, guesses, latent_z
 
 def compute_correlations(original, sanitized):
@@ -34,15 +40,33 @@ def compute_correlations(original, sanitized):
         spearman_corrs.append(spearman_corr)
     return np.array(pearson_corrs), np.array(spearman_corrs)
 
-def plot_correlation_distributions(pearson_corrs, spearman_corrs):
+def meep_compute_correlations(og_or_sanitized: np.ndarray, sensitive: np.ndarray):
+    """
+    For now we assume sensitive is a single column
+    """
+    assert len(sensitive.shape) == 1, f"Your sensitive tensor is of shape {sensitive.shape}, it should be a 1-d vector."
+
+    pearson_corrs = []
+    spearman_corrs = []
+    for i in range(og_or_sanitized.shape[-1]):
+        pearson_corr, _ = pearsonr(og_or_sanitized[:, i].flatten(), sensitive)
+        spearman_corr, _ = spearmanr(og_or_sanitized[:, i].flatten(), sensitive)
+        pearson_corrs.append(pearson_corr)
+        spearman_corrs.append(spearman_corr)
+    return np.array(pearson_corrs), np.array(spearman_corrs)
+
+
+def plot_correlation_distributions(pearson_corrs, spearman_corrs, save_dist: str, title: str):
     """Plot distributions of Pearson and Spearman correlations."""
     plt.figure(figsize=(12, 5))
     sns.histplot(pearson_corrs, kde=True, label='Pearson', color='blue', bins=30)
     sns.histplot(spearman_corrs, kde=True, label='Spearman', color='orange', bins=30)
     plt.xlabel("Correlation Coefficient")
+    plt.xlim(-1, 1)
     plt.ylabel("Frequency")
-    plt.title("Distribution of Pearson and Spearman Correlations")
+    plt.title(title)
     plt.legend()
+    plt.savefig(save_dist, dpi=300)
     plt.show()
 
 def perform_pca(original, sanitized, n_components=2):
@@ -77,6 +101,24 @@ def plot_pca(original_pca, sanitized_pca):
     
     plt.show()
 
+def plot_all(features: np.ndarray, idxs: List[int], fig_name: str):
+    """
+    Simply plot all 16 features in a 4x4 grid
+    """
+    plt.figure(figsize=(16, 16))
+    plt.tight_layout()
+    print(f" feature_shape: {len(features)}, idxs_len: {len(idxs)}")
+    for i in range(features.shape[-1]):
+        current_idx = idxs[i]
+        plt.subplot(4, 4, current_idx+1)
+        plt.plot(features[:, i])
+        plt.title(f"Feature {i}")
+        plt.xlabel("Time")
+        plt.ylabel("Value")
+    plt.savefig(f"figures/{fig_name}.png")
+    plt.close()
+
+
 def main(args: argparse.Namespace):
 
     original_path = "./results/val_x_[5].npy"  # Original data
@@ -97,7 +139,14 @@ def main(args: argparse.Namespace):
     priv_col = 5
     public_feats = list(set(range(original.shape[-1])) - {priv_col})
     private_feats= [priv_col]
+
+    # Just for good measure plot_all the figures
+    plot_all(original, list(range(16)), "Original")
+
+    none_idxs = [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    plot_all(sanitized, none_idxs, "Sanitized")
     
+
     # Plot the sanitized
     plot_signal_reconstructions(
         original[:, public_feats],
@@ -111,14 +160,67 @@ def main(args: argparse.Namespace):
         original[:, private_feats], guesses, "figures/adversary_guesses.png"
     )
 
-    
-    # Compute correlations
-    pearson_corrs, spearman_corrs = compute_correlations(original[:,public_feats], sanitized)
-    plot_correlation_distributions(pearson_corrs, spearman_corrs)
+    # Compute all correlations
+    compute_all_correlations(original, sanitized, latent_z, public_feats, private_feats)
+
     
     # Perform and plot PCA
     original_pca, sanitized_pca = perform_pca(original, sanitized, n_components=2)
-    plot_pca(original_pca, sanitized_pca)
+    # plot_pca(original_pca, sanitized_pca)
+
+
+def compute_all_correlations(
+    original: np.ndarray,
+    sanitized_feats: np.ndarray,
+    latent: np.ndarray,
+    public_feats: List[int],
+    private_feats: List[int],
+):
+    """
+    Simply for organizational purposes
+    """
+    # Compute correlations for real aspects
+    pearson_corrs, spearman_corrs = meep_compute_correlations(
+        original[:, public_feats], original[:, private_feats].flatten()
+    )
+    print(
+        f"Correlations between original and sensitive: \n\tPearson: {pearson_corrs}\n\tSpearman:{spearman_corrs}"
+    )
+    plot_correlation_distributions(
+        pearson_corrs,
+        spearman_corrs,
+        "figures/correlation_distributions_original.png",
+        "Distribution of Pearson and Spearman Correlations: Original vs Sensitive",
+    )
+    pearson_corrs, spearman_corrs = meep_compute_correlations(
+        latent, original[:, private_feats].flatten()
+    )
+    print(
+        f"Correlations between latent_z and sensitive: \n\tPearson: {pearson_corrs}\n\tSpearman:{spearman_corrs}",
+    )
+    plot_correlation_distributions(
+        pearson_corrs,
+        spearman_corrs,
+        "figures/correlation_distributions_latent.png",
+        "Distribution of Pearson and Spearman Correlations: Original vs Sensitive: Original vs Latent",
+    )
+
+
+    # Compute Correlations for Sanitized
+    pearson_corrs, spearman_corrs = meep_compute_correlations(
+        sanitized_feats, original[:, private_feats].flatten()
+    )
+    print(
+        f"Correlations between sanitized and sensitive: \n\tPearson: {pearson_corrs}\n\tSpearman:{spearman_corrs}",
+    )
+    plot_correlation_distributions(
+        pearson_corrs,
+        spearman_corrs,
+        "figures/correlation_distributions_sanitized.png",
+        "Distribution of Pearson and Spearman Correlations: Original vs Sensitive: Original vs Sanitized",
+    )
+
+
 
 def plot_signal_reconstructions(original, sanitized, save_name: str, ids=None):
     """Plot signal reconstructions using Seaborn with a clean look."""

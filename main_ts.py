@@ -64,7 +64,7 @@ def argsies() -> argparse.Namespace:
         type=list,
         nargs="+",
     )
-    ap.add_argument("--kl_dig_hypr", "-k", default=0.00001, type=float)
+    ap.add_argument("--kl_dig_hypr", "-k", default=0.001, type=float)
 
     ap.add_argument("--no-autoindent")
     ap.add_argument("--seed", default=0, type=int)
@@ -260,7 +260,6 @@ def baseline_pca_decorrelation(
     ########################################
     reconstruction_losses = []
     for e in tqdm(range(epochs), desc="Epochs"):
-        logger.info(f"Epoch {e} of {epochs}")
         for batch_no in tqdm(range(num_batches), desc="Batches"):
             # Now Get the new VAE generations
             batch_pub = sanitized_projections_for_training[batch_no * batch_size : (batch_no + 1) * batch_size]
@@ -280,7 +279,6 @@ def baseline_pca_decorrelation(
                 wandb.log({
                     "adv_train_loss": loss.item(),
                 })
-            print("Here")
 
     # Plot reconstruction losses
     plt.figure(figsize=(16,10))
@@ -432,15 +430,12 @@ def baseline_trivial_correlation(
     # Once we have that we can start training the adversary
     adv_losses = []
     for e in tqdm(range(epochs), desc="Epochs"):
-        logger.info(f"Epoch {e} of {epochs}")
         for batch_no in tqdm(range(num_batches), desc="Batches"):
             batch_all = all_train_seqs[batch_no * batch_size : (batch_no + 1) * batch_size]
             batch_pub = train_pub[batch_no * batch_size : (batch_no + 1) * batch_size]
             batch_prv = train_prv[batch_no * batch_size : (batch_no + 1) * batch_size]
             if batch_pub.shape[0] != batch_size:
                 continue
-
-            logger.info(f"Batch {batch_no} out of {num_batches} with shape {batch_pub.shape}")
 
             ########################################
             # 1. Get the adversary to guess the sensitive column
