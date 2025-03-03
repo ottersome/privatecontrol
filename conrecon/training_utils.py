@@ -173,6 +173,7 @@ def train_adversary(
     model_vae: nn.Module,
     model_adversary: nn.Module,
     opt_adversary: torch.optim.Optimizer, # type: ignore
+    epochs: int,
     epoch_sample_percent: float,
     global_samples: torch.Tensor,
     num_cols: int,
@@ -184,39 +185,39 @@ def train_adversary(
     num_subsamples = ceil(epoch_sample_percent * global_samples.shape[0])
     # TODO: test this out
     device = next(model_vae.parameters()).device
-    random_indices = torch.randint(0, global_samples.shape[0], (num_subsamples,), dtype=torch.long).to(device)
-    subsamples = torch.index_select(global_samples, 0, random_indices)
-
-    train_pub = subsamples[:, :, pub_cols]
-    train_prv = subsamples[:, :, prv_cols]
-
     num_batches = ceil(global_samples.shape[0] / batch_size)
 
-    for batch_no in range(num_batches):
-        ########################################
-        # Data Preparation
-        ########################################
-        batch_all = subsamples[
-            batch_no * batch_size : (batch_no + 1) * batch_size
-        ]
-        batch_prv = train_prv[batch_no * batch_size : (batch_no + 1) * batch_size]
-        batch_privTrue_flat = (
-            batch_prv[:, -1, :].view(-1, batch_prv.shape[-1]).flatten()
-        )  # Grab only last in sequeence
-        # WARNING: Check on that -1 seems sus.
-        with torch.no_grad():
-             latent_z, sanitized_data, _ = model_vae(batch_all[:,:-1,:]) # Do not leak the last element of sequence
-        adversary_guess_flat = model_adversary(latent_z).flatten()
-        # WARNING: Check on that -1 seems sus.
-        batch_privTrue_flat = batch_prv[:, -1, :].view(-1, batch_prv.shape[-1])
+    for e in range(epochs):
+        random_indices = torch.randint(0, global_samples.shape[0], (num_subsamples,), dtype=torch.long).to(device)
+        subsamples = torch.index_select(global_samples, 0, random_indices)
+        train_pub = subsamples[:, :, pub_cols]
+        train_prv = subsamples[:, :, prv_cols]
 
-        ########################################
-        # Gradient Calculation
-        ########################################
-        adv_train_loss = F.mse_loss(adversary_guess_flat, batch_privTrue_flat)
-        model_adversary.zero_grad()
-        adv_train_loss.backward()
-        opt_adversary.step()
+        for batch_no in range(num_batches):
+            ########################################
+            # Data Preparation
+            ########################################
+            batch_all = subsamples[
+                batch_no * batch_size : (batch_no + 1) * batch_size
+            ]
+            batch_prv = train_prv[batch_no * batch_size : (batch_no + 1) * batch_size]
+            batch_privTrue_flat = (
+                batch_prv[:, -1, :].view(-1, batch_prv.shape[-1]).flatten()
+            )  # Grab only last in sequeence
+            # WARNING: Check on that -1 seems sus.
+            with torch.no_grad():
+                 latent_z, sanitized_data, _ = model_vae(batch_all[:,:-1,:]) # Do not leak the last element of sequence
+            adversary_guess_flat = model_adversary(latent_z).flatten()
+            # WARNING: Check on that -1 seems sus.
+            batch_privTrue_flat = batch_prv[:, -1, :].view(-1, batch_prv.shape[-1])
+
+            ########################################
+            # Gradient Calculation
+            ########################################
+            adv_train_loss = F.mse_loss(adversary_guess_flat, batch_privTrue_flat)
+            model_adversary.zero_grad()
+            adv_train_loss.backward()
+            opt_adversary.step()
 
     return model_adversary
 
