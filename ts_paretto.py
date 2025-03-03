@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import wandb
 import argparse
+from typing import List
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -64,6 +65,44 @@ def argsies() -> argparse.Namespace:
 
     return ap.parse_args()
 
+def plot_pareto_frontier(privacies: List[float], utilities: List[float], uvp_tradeoffs: List[float]):
+    # Create a publication-ready plot using seaborn
+    plt.figure(figsize=(8, 6))  # Standard figure size for paper columns
+    
+    # Set the style for academic publications
+    sns.set_style("whitegrid")
+    sns.set_context("paper", font_scale=1.5)
+    
+    # Create the main scatter plot with improved aesthetics
+    scatter = sns.scatterplot(x=privacies, y=utilities, 
+                            color='#2E86C1',  # Professional blue color
+                            s=100,  # Marker size
+                            alpha=0.7)  # Slight transparency
+    
+    # Add annotations with improved positioning and style
+    for i, uvp in enumerate(uvp_tradeoffs):
+        plt.annotate(f"UVP: {uvp:.4f}", 
+                    (privacies[i], utilities[i]),
+                    xytext=(8, 8),
+                    textcoords='offset points',
+                    fontsize=10,
+                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
+    
+    # Customize the plot with publication-quality formatting
+    plt.title("Privacy-Utility Trade-off Analysis", pad=20)
+    plt.xlabel("Privacy Score", labelpad=10)
+    plt.ylabel("Utility Score", labelpad=10)
+    
+    # Adjust layout to prevent label clipping
+    plt.tight_layout()
+    
+    # Save with high DPI for print quality
+    plt.savefig("./figures/privacy_vs_utility.png", 
+                dpi=300, 
+                bbox_inches='tight',
+                facecolor='white')
+    plt.close()
+
 def main():
     args = argsies()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -110,6 +149,7 @@ def main():
 
     privacies = []
     utilities = []
+    uvps_so_far = []
     for uvp in utility_vs_privacy_tradeoff:
         ########################################
         # Training VAE and Adversary
@@ -144,8 +184,7 @@ def main():
             args.lr,
             args.kl_dig_hypr,
             args.wandb,
-            logger,
-            args.priv_utility_tradeoff_coeff,
+            uvp,
         )
         privacy, utility = get_tradeoff_metrics(
             test_file,
@@ -158,44 +197,10 @@ def main():
         )
         privacies.append(privacy)
         utilities.append(utility)
+        uvps_so_far.append(uvp)
         logger.info(f"Validation Metrics are {privacy}, {utility}")
+        plot_pareto_frontier(privacies, utilities, uvps_so_far)
 
-    # Create a publication-ready plot using seaborn
-    plt.figure(figsize=(8, 6))  # Standard figure size for paper columns
-    
-    # Set the style for academic publications
-    sns.set_style("whitegrid")
-    sns.set_context("paper", font_scale=1.5)
-    
-    # Create the main scatter plot with improved aesthetics
-    scatter = sns.scatterplot(x=privacies, y=utilities, 
-                            color='#2E86C1',  # Professional blue color
-                            s=100,  # Marker size
-                            alpha=0.7)  # Slight transparency
-    
-    # Add annotations with improved positioning and style
-    for i, uvp in enumerate(utility_vs_privacy_tradeoff):
-        plt.annotate(f"UVP: {uvp:.2f}", 
-                    (privacies[i], utilities[i]),
-                    xytext=(8, 8),
-                    textcoords='offset points',
-                    fontsize=10,
-                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
-    
-    # Customize the plot with publication-quality formatting
-    plt.title("Privacy-Utility Trade-off Analysis", pad=20)
-    plt.xlabel("Privacy Score", labelpad=10)
-    plt.ylabel("Utility Score", labelpad=10)
-    
-    # Adjust layout to prevent label clipping
-    plt.tight_layout()
-    
-    # Save with high DPI for print quality
-    plt.savefig("./figures/privacy_vs_utility.png", 
-                dpi=300, 
-                bbox_inches='tight',
-                facecolor='white')
-    plt.close()
     logger.info("All baselines complete. Exiting")
     exit()
 
