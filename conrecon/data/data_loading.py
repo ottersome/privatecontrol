@@ -292,7 +292,7 @@ def split_defacto_runs(
     val_split: float,
     seq_length: int, 
     oversample_coefficient: float,
-    scale: bool = True,
+    scale: bool,
 ) -> Tuple[OrderedDict[str, np.ndarray], OrderedDict[str, np.ndarray], np.ndarray]:
     """
     Will basically split the output of load_defacto_data into train, validation and test

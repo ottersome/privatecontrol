@@ -69,7 +69,6 @@ def argsies() -> argparse.Namespace:
     ap.add_argument("--no-autoindent")
     ap.add_argument("--seed", default=0, type=int)
     ap.add_argument("--lr", default=0.001, type=float)
-    ap.add_argument("--first_n_states", default=7, type=int)
     ap.add_argument("--adversary_hidden_size", default=32, type=int)
     ap.add_argument("--padding_value", default=-1, type=int)
 
@@ -489,13 +488,6 @@ def baseline_trivial_correlation(
     return trivial_adversary, adv_losses
 
 
-def baseline_kosambi_karhunen_loeve(test_runs: OrderedDict[str, np.ndarray], pretrained_adversary: nn.Module):
-    """
-    Kosambi Karhunen Loeve baseline
-    """
-    pass
-
-
 def main():
     args = argsies()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -529,20 +521,6 @@ def main():
 
     logger.info(f"Using device is {device}")
 
-    # ########################################
-    # # What Stefano Wants
-    # ########################################
-    # meep = pca_decomposition_w_heatmap(
-    #     train_seqs,
-    #     test_file,
-    #     args.cols_to_hide,
-    #     args.batch_size,
-    #     args.correlation_threshold,
-    #     args.epochs,
-    #     args.lr,
-    #     device,
-    # )
-    
     # Get Informaiton for the VAE
     ########################################
     # Setup up the models
@@ -586,7 +564,6 @@ def main():
         args.lr,
         args.kl_dig_hypr,
         args.wandb,
-        logger,
         args.priv_utility_tradeoff_coeff,
     )
     plot_training_losses(recon_losses, adv_losses, f"./figures/new_data_vae/recon-adv_losses.png")

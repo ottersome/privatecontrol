@@ -165,7 +165,7 @@ def pca_test_entire_file(
     # Chart for Adversary
     ########################################
     adv_to_show = seq_guesses[:, :]
-    adv_truth = test_file[:, prv_features_idxs]
+    adv_truth = test_file[sequence_length:, prv_features_idxs]
     
     logger.info("Creating PCA Adversary Graph")
     fig = plt.figure(figsize=(16,10))
@@ -265,7 +265,7 @@ def vae_test_file(
     ########################################
 
     # Lets now save the figure
-    some_8_idxs = np.random.randint(0, seq_sanitized.shape[1], 8)
+    some_8_idxs = torch.randperm(seq_sanitized.shape[1])[:8]
 
     recon_to_show = seq_sanitized[:, some_8_idxs]
     truth_to_compare = test_file[:, some_8_idxs]
@@ -330,24 +330,19 @@ def get_tradeoff_metrics(
     ########################################
     # Setup some simple stuff here
     ########################################
-    metrics = {
-        "recon_loss": [],
-        "adv_loss": [],
-    }
     model_vae.eval()
     model_adversary.eval()
     device = next(model_vae.parameters()).device
     test_x = torch.from_numpy(test_file).to(torch.float32).to(device)
     public_columns = list(set(range(test_x.shape[-1])) - set(idxs_colsToGuess))
     private_columns = list(idxs_colsToGuess)
-    test_pub = test_x[:,public_columns]
-    test_prv = test_x[:,private_columns]
-    num_batches = ceil(len(test_x) / batch_size)
+    test_pub = test_x[sequence_length:, public_columns]
+    test_prv = test_x[sequence_length:, private_columns]
+    num_batches = ceil((len(test_x) - sequence_length) / batch_size) ## Subtract sequence_length to avoid padding
 
     ########################################
     # Go through all the public data first
     ########################################
-
     batch_guesses = []
     batch_reconstructions = []
     for batch_no in range(num_batches):
@@ -358,10 +353,11 @@ def get_tradeoff_metrics(
         end_idx = min((batch_no + 1) * batch_size, test_x.shape[0])
         backhistory = collect_n_sequential_batches(test_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)
         backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
-        latent_z, sanitized_data, kl_divergence = model_vae(backhistory)
+        with torch.no_grad():
+            latent_z, sanitized_data, kl_divergence = model_vae(backhistory)
 
-        # TODO: Incorporate Adversary Guess
-        adversary_guess = model_adversary(latent_z)
+        with torch.no_grad():
+            adversary_guess = model_adversary(latent_z)
         batch_guesses.append(adversary_guess)
         batch_reconstructions.append(sanitized_data)
 

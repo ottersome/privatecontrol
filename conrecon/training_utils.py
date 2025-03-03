@@ -18,7 +18,7 @@ from conrecon.dplearning.adversaries import (
 )
 from conrecon.dplearning.vae import SequenceToScalarVAE, SequenceToScalarVAE
 from conrecon.plotting import TrainLayout
-from conrecon.utils import create_logger, set_seeds
+from conrecon.utils import create_logger
 from conrecon.validation_functions import calculate_validation_metrics
 from conrecon.performance_test_functions import (
     vae_test_file,
@@ -26,6 +26,7 @@ from conrecon.performance_test_functions import (
     pca_test_entire_file,
 )
 
+logger = create_logger("training_utils")
 
 def train_vae_and_adversary(
     batch_size: int,
@@ -40,7 +41,6 @@ def train_vae_and_adversary(
     learning_rate: float,
     kl_dig_hypr: float,
     wandb_on: bool,
-    logger: logging.Logger,
     priv_utility_tradeoff_coeff: float,
 ) -> Tuple[nn.Module, nn.Module, List, List]:
     """
@@ -122,7 +122,8 @@ def train_vae_and_adversary(
             pub_prediction = batch_pub[:, -1, :]
 
             # Take Latent Features and Get Adversary Guess
-            adversary_guess_flat = model_adversary(latent_z)
+            with torch.no_grad():
+                adversary_guess_flat = model_adversary(latent_z)
             # Check on performance
             batch_y_flat = batch_prv[:, -1, :].view(-1, batch_prv.shape[-1])
             pub_recon_loss = F.mse_loss(sanitized_data, pub_prediction)
@@ -182,7 +183,8 @@ def train_adversary(
 ) -> nn.Module:
     pub_cols = list(set(range(num_cols)) - set(prv_cols))
 
-    num_subsamples = ceil(epoch_sample_percent * global_samples.shape[0])
+    model_vae.eval()
+    num_subsamples = min(ceil(epoch_sample_percent * global_samples.shape[0]), global_samples.shape[0])
     # TODO: test this out
     device = next(model_vae.parameters()).device
     num_batches = ceil(global_samples.shape[0] / batch_size)
@@ -219,6 +221,7 @@ def train_adversary(
             adv_train_loss.backward()
             opt_adversary.step()
 
+    model_vae.train()
     return model_adversary
 
 
@@ -237,7 +240,6 @@ def train_vae_and_adversary_bi_level(
     learning_rate: float,
     kl_dig_hypr: float,
     wandb_on: bool,
-    logger: logging.Logger,
     priv_utility_tradeoff_coeff: float,
 ) -> Tuple[nn.Module, nn.Module, List, List]:
     """
