@@ -298,6 +298,7 @@ def train_vae_and_adversary_bi_level(
                 model_vae,
                 model_adversary,
                 opt_adversary,
+                inner_epochs,
                 epoch_sample_percent,
                 batch_all,
                 total_num_features,
