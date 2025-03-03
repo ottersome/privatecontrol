@@ -5,13 +5,14 @@ import wandb
 import argparse
 
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.adversaries import Adversary
 from conrecon.dplearning.vae import SequenceToScalarVAE
 from conrecon.utils import create_logger, set_seeds
 from conrecon.performance_test_functions import get_tradeoff_metrics
-from conrecon.training_utils import train_vae_and_adversary
+from conrecon.training_utils import train_vae_and_adversary, train_vae_and_adversary_bi_level
 
 def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
@@ -147,18 +148,42 @@ def main():
         utilities.append(utility)
         logger.info(f"Validation Metrics are {privacy}, {utility}")
 
-    # Now we plot all of the results
-    plt.figure(figsize=(16,10))
-    plt.scatter(privacies, utilities)
-    for i, uvp in enumerate(utility_vs_privacy_tradeoff): 
-        plt.annotate(f"UVP: {uvp:.2f}", (privacies[i], utilities[i]), xytext=(5, 5), textcoords='offset points')
-    plt.title("Privacy vs Utility")
-    plt.xlabel("Privacy") 
-    plt.ylabel("Utility")                           
-    # plt.xscale('log')
-    plt.savefig(f"./figures/privacy_vs_utility.png")
-    plt.close() 
-
+    # Create a publication-ready plot using seaborn
+    plt.figure(figsize=(8, 6))  # Standard figure size for paper columns
+    
+    # Set the style for academic publications
+    sns.set_style("whitegrid")
+    sns.set_context("paper", font_scale=1.5)
+    
+    # Create the main scatter plot with improved aesthetics
+    scatter = sns.scatterplot(x=privacies, y=utilities, 
+                            color='#2E86C1',  # Professional blue color
+                            s=100,  # Marker size
+                            alpha=0.7)  # Slight transparency
+    
+    # Add annotations with improved positioning and style
+    for i, uvp in enumerate(utility_vs_privacy_tradeoff):
+        plt.annotate(f"UVP: {uvp:.2f}", 
+                    (privacies[i], utilities[i]),
+                    xytext=(8, 8),
+                    textcoords='offset points',
+                    fontsize=10,
+                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
+    
+    # Customize the plot with publication-quality formatting
+    plt.title("Privacy-Utility Trade-off Analysis", pad=20)
+    plt.xlabel("Privacy Score", labelpad=10)
+    plt.ylabel("Utility Score", labelpad=10)
+    
+    # Adjust layout to prevent label clipping
+    plt.tight_layout()
+    
+    # Save with high DPI for print quality
+    plt.savefig("./figures/privacy_vs_utility.png", 
+                dpi=300, 
+                bbox_inches='tight',
+                facecolor='white')
+    plt.close()
     logger.info("All baselines complete. Exiting")
     exit()
 
