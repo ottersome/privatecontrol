@@ -19,7 +19,7 @@ def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     # State stuff here
     ap.add_argument(
-        "-e", "--epochs", default=100, help="How many epochs to train for", type=int
+        "-e", "--epochs", default=15, help="How many epochs to train for", type=int
     )
     ap.add_argument("-l", "--lr", default=0.001, type=float) 
     ap.add_argument("--adversary_epochs", default=3, help="How many epochs to train advesrary for", type=int)
@@ -31,7 +31,7 @@ def argsies() -> argparse.Namespace:
         type=str,
         help="Where to load the data from",
     )
-    ap.add_argument("--batch_size", default=16, type=int)
+    ap.add_argument("--batch_size", default=64, type=int)
     ap.add_argument("--rnn_num_layers", default=2, type=int)
     ap.add_argument("--rnn_hidden_size", default=15, type=int)
     ap.add_argument(
@@ -59,7 +59,7 @@ def argsies() -> argparse.Namespace:
     ap.add_argument("--kl_dig_hypr", "-k", default=0.001, type=float) # type: ignore 
     ap.add_argument("--seed", default=0, type=int) 
     ap.add_argument("--debug", "-d", action="store_true", help="Whether or not to use debugpy for trainig") 
-    ap.add_argument("--debug_port", default=42020, help="Port to use for debugging") 
+    ap.add_argument("--debug_port", default=42022, help="Port to use for debugging") 
     ap.add_argument("--wandb", "-w", action="store_true", help="Whether or not to use wandb for logging") 
     ap.add_argument("--padding_value", default=-1, type=int) 
 
@@ -136,7 +136,8 @@ def main():
     # TODO: vary this boi
     # utility_vs_privacy_tradeoff = np.linspace(0.0, 10, 10) 
     # Do logspace instead
-    utility_vs_privacy_tradeoff = np.logspace(-3, 3, 11, base=2)
+    utility_vs_privacy_tradeoff = np.logspace(-8, 3, 11, base=2)
+    # utility_vs_privacy_tradeoff = np.linspace(0.125, 8, 11)
 
     ########################################
     # Setup up the models

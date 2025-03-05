@@ -39,8 +39,8 @@ def argsies() -> argparse.Namespace:
     ap.add_argument(
         "-e", "--epochs", default=100, help="How many epochs to train for", type=int
     )
-    ap.add_argument("--adversary_epochs", default=3, help="How many epochs to train advesrary for", type=int)
-    ap.add_argument("--adv_epoch_subsample_percent", default=1.8, help="How many epochs to train advesrary for", type=int)
+    ap.add_argument("--adversary_epochs", default=1, help="How many epochs to train advesrary for", type=int)
+    ap.add_argument("--adv_epoch_subsample_percent", default=0.9, help="How many epochs to train advesrary for", type=int)
     ap.add_argument(
         "--defacto_data_raw_path",
         default="./data/",
@@ -118,7 +118,7 @@ def argsies() -> argparse.Namespace:
     )
     ap.add_argument(
         "--priv_utility_tradeoff_coeff",
-        default=1.1,
+        default=1,
         # default=4,
         type=float,
         help="The threshold for retaining principal components",
@@ -556,6 +556,7 @@ def main():
         device,
         train_seqs,
         val_seqs,
+        test_file,
         args.epochs,
         args.adversary_epochs,
         args.adv_epoch_subsample_percent,
