@@ -5,7 +5,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import wandb
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import logging
 from math import ceil
 
@@ -230,16 +230,16 @@ def train_vae_and_adversary_bi_level(
     batch_size: int,
     priv_columns: List[int],
     data_columns: List[str],
-    device: torch.device,
-    ds_train: Dict[str, np.ndarray],
-    ds_val: Dict[str, np.ndarray],
-    ds_test:  np.ndarray, # TOREM: After debugging
+    all_train_seqs: torch.Tensor,
+    all_valid_seqs: torch.Tensor,
+    ds_test:  Optional[np.ndarray], # TOREM: After debugging
     epochs: int,
     inner_epochs: int,  # These are for the adversary
     epoch_sample_percent: float,
     model_vae: nn.Module,
     model_adversary: nn.Module,
-    learning_rate: float,
+    opt_vae: torch.optim.Optimizer,# type: ignore
+    opt_adversary: torch.optim.Optimizer, # type: ignore
     kl_dig_hypr: float,
     wandb_on: bool,
     priv_utility_tradeoff_coeff: float,
@@ -253,19 +253,6 @@ def train_vae_and_adversary_bi_level(
     pub_columns = list(set(range(total_num_features)) - set(priv_columns))
     device = next(model_vae.parameters()).device
 
-    # Configuring Optimizers
-    opt_adversary = torch.optim.Adam(model_adversary.parameters(), lr=learning_rate)  # type: ignore
-    opt_vae = torch.optim.Adam(model_vae.parameters(), lr=learning_rate)  # type: ignore
-
-    ##  A bit of extra processing of data. (Specific to this version of training)
-    # Information comes packed in dictionary elements for each file. We need to mix it up a bit
-    all_train_seqs = np.concatenate([seqs for _, seqs in ds_train.items()], axis=0)
-    all_valid_seqs = np.concatenate([seqs for _, seqs in ds_val.items()], axis=0)
-    # Shuffle, Batch, Torch Coversion, Feature Separation
-    np.random.shuffle(all_train_seqs)
-    np.random.shuffle(all_valid_seqs)
-    all_train_seqs = torch.from_numpy(all_train_seqs).to(torch.float32).to(device)
-    all_valid_seqs = torch.from_numpy(all_valid_seqs).to(torch.float32).to(device)
     train_pub = all_train_seqs[:, :, pub_columns]
     train_prv = all_train_seqs[:, :, priv_columns]
 
@@ -310,20 +297,21 @@ def train_vae_and_adversary_bi_level(
                 priv_columns,
                 batch_size,
             )
-            # DEBUG: Check on adversaries performance
-            os.makedirs("./figures/progress/", exist_ok=True)
-            metrics = vae_test_file(
-                ds_test,
-                priv_columns,
-                model_vae,
-                model_adversary,
-                sequence_len,
-                -1,
-                batch_size,
-                wandb_on,
-                recon_savefig_loc=f"./figures/progress/vae_reconstruction_{e+1}.png",
-                adv_savefig_loc=f"./figures/progress/vae_adversary_{e+1}.png",
-            )
+            if ds_test is not None:
+                # DEBUG: Check on adversaries performance
+                os.makedirs("./figures/progress/", exist_ok=True)
+                metrics = vae_test_file(
+                    ds_test,
+                    priv_columns,
+                    model_vae,
+                    model_adversary,
+                    sequence_len,
+                    -1,
+                    batch_size,
+                    wandb_on,
+                    recon_savefig_loc=f"./figures/progress/vae_reconstruction_{e+1}.png",
+                    adv_savefig_loc=f"./figures/progress/vae_adversary_{e+1}.png",
+                )
 
             # Now we train the autoencoder to try to fool the adversary
             latent_z, sanitized_data, kl_divergence = model_vae(batch_all[:,:-1,:]) # Do not leak the last element of sequence

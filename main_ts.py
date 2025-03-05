@@ -339,8 +339,22 @@ def main():
         num_classes=num_private_cols,
     ).to(device)
 
+    # Configuring Optimizers
+    opt_adversary = torch.optim.Adam(model_adversary.parameters(), lr=args.lr)  # type: ignore
+    opt_vae = torch.optim.Adam(model_vae.parameters(), lr=args.lr)  # type: ignore
+
     logger.debug(f"Columns are {columns}")
     logger.debug(f"Runs dict is {runs_dict}")
+
+    # Prep the data
+    # Information comes packed in dictionary elements for each file. We need to mix it up a bit
+    all_train_seqs = np.concatenate([seqs for _, seqs in train_seqs.items()], axis=0)
+    all_valid_seqs = np.concatenate([seqs for _, seqs in val_seqs.items()], axis=0)
+    # Shuffle, Batch, Torch Coversion, Feature Separation
+    np.random.shuffle(all_train_seqs)
+    np.random.shuffle(all_valid_seqs)
+    all_train_seqs = torch.from_numpy(all_train_seqs).to(torch.float32).to(device)
+    all_valid_seqs = torch.from_numpy(all_valid_seqs).to(torch.float32).to(device)
 
     ########################################
     # Training VAE and Adversary
@@ -350,16 +364,16 @@ def main():
         args.batch_size,
         args.cols_to_hide,
         columns,
-        device,
-        train_seqs,
-        val_seqs,
+        all_train_seqs,
+        all_valid_seqs,
         test_file,
         args.epochs,
         args.adversary_epochs,
         args.adv_epoch_subsample_percent,
         model_vae,
         model_adversary,
-        args.lr,
+        opt_vae,
+        opt_adversary,
         args.kl_dig_hypr,
         args.wandb,
         args.priv_utility_tradeoff_coeff,

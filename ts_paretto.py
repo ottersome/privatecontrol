@@ -1,11 +1,11 @@
+import argparse
+import os
+from datetime import datetime
+
 import debugpy
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import wandb
-import argparse
-from typing import List
-
-import matplotlib.pyplot as plt
 import seaborn as sns
 
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
@@ -65,7 +65,7 @@ def argsies() -> argparse.Namespace:
 
     return ap.parse_args()
 
-def plot_pareto_frontier(privacies: List[float], utilities: List[float], uvp_tradeoffs: List[float]):
+def plot_pareto_frontier(privacies: list[float], utilities: list[float], uvp_tradeoffs: list[float]):
     # Create a publication-ready plot using seaborn
     plt.figure(figsize=(8, 6))  # Standard figure size for paper columns
     
@@ -143,46 +143,75 @@ def main():
     # Setup up the models
     ########################################
     vae_input_size = len(columns) # I think sending all of them is better
-    # TODO: Get the model going
+    model_vae = SequenceToScalarVAE(
+        input_size=vae_input_size,
+        num_sanitized_features=num_public_cols,
+        latent_size=args.vae_latent_size,
+        hidden_size=args.vae_hidden_size,
+        rnn_num_layers=args.rnn_num_layers,
+        rnn_hidden_size=args.rnn_hidden_size,
+    ).to(device)
+    model_adversary = Adversary(
+        input_size=args.vae_latent_size,
+        hidden_size=args.vae_hidden_size,
+        num_classes=num_private_cols,
+    ).to(device)
+    # Configuring Optimizers
+    opt_adversary = torch.optim.Adam(model_adversary.parameters(), lr=args.lr)  # type: ignore
+    opt_vae = torch.optim.Adam(model_vae.parameters(), lr=args.lr)  # type: ignore
+
+    reset_vae_state = model_vae.state_dict()
+    reset_adv_state = model_adversary.state_dict()
+    reset_opt_vae_state = opt_vae.state_dict()
+    reset_opt_adv_state = opt_adversary.state_dict()
+
 
     logger.debug(f"Columns are {columns}")
     logger.debug(f"Runs dict is {runs_dict}")
 
+    time_date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    logger.info(f"Labeling this paretto run as {time_date}")
+    run_name = f"uvp_data_{time_date}"
+    os.makedirs(f"./results/{run_name}", exist_ok=True)
+
     privacies = []
     utilities = []
     uvps_so_far = []
+
+    # Prep the data
+    # Information comes packed in dictionary elements for each file. We need to mix it up a bit
+    all_train_seqs = np.concatenate([seqs for _, seqs in train_seqs.items()], axis=0)
+    all_valid_seqs = np.concatenate([seqs for _, seqs in val_seqs.items()], axis=0)
+    # Shuffle, Batch, Torch Coversion, Feature Separation
+    np.random.shuffle(all_train_seqs)
+    np.random.shuffle(all_valid_seqs)
+    all_train_seqs = torch.from_numpy(all_train_seqs).to(torch.float32).to(device)
+    all_valid_seqs = torch.from_numpy(all_valid_seqs).to(torch.float32).to(device)
+
     for uvp in utility_vs_privacy_tradeoff:
+        # Reset state dict
+        model_vae.load_state_dict(reset_vae_state)
+        model_adversary.load_state_dict(reset_adv_state)
+        opt_vae.load_state_dict(reset_opt_vae_state)
+        opt_adversary.load_state_dict(reset_opt_adv_state)
         ########################################
         # Training VAE and Adversary
         ########################################
-        model_vae = SequenceToScalarVAE(
-            input_size=vae_input_size,
-            num_sanitized_features=num_public_cols,
-            latent_size=args.vae_latent_size,
-            hidden_size=args.vae_hidden_size,
-            rnn_num_layers=args.rnn_num_layers,
-            rnn_hidden_size=args.rnn_hidden_size,
-        ).to(device)
-        model_adversary = Adversary(
-            input_size=args.vae_latent_size,
-            hidden_size=args.vae_hidden_size,
-            num_classes=num_private_cols,
-        ).to(device)
-
         logger.info("Starting the VAE Training")
         model_vae, model_adversary, recon_losses, adv_losses = train_vae_and_adversary_bi_level(
             args.batch_size,
             args.cols_to_hide,
             columns,
-            device,
-            train_seqs,
-            val_seqs,
+            all_train_seqs,
+            all_valid_seqs,
+            None, # We dont need to plot this on every round. Too time consuming
             args.epochs,
             args.adversary_epochs,
             args.adv_intra_epoch_sampling,
             model_vae,
             model_adversary,
-            args.lr,
+            opt_vae,
+            opt_adversary,
             args.kl_dig_hypr,
             args.wandb,
             uvp,
@@ -198,9 +227,17 @@ def main():
         )
         privacies.append(privacy)
         utilities.append(utility)
+
+        # Save these to disk 
+        np.save(f"./results/{run_name}/privacies.npy", privacies)
+        np.save(f"./results/{run_name}/utilities.npy", utilities)
+
         uvps_so_far.append(uvp)
         logger.info(f"Validation Metrics are {privacy}, {utility}")
         plot_pareto_frontier(privacies, utilities, uvps_so_far)
+
+    # Save the uvp data
+    np.save(f"./results/{run_name}/uvp.npy", utility_vs_privacy_tradeoff)
 
     logger.info("All baselines complete. Exiting")
     exit()
