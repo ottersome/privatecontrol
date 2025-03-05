@@ -1,3 +1,4 @@
+import os
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -129,7 +130,7 @@ def train_vae_and_adversary(
             pub_recon_loss = F.mse_loss(sanitized_data, pub_prediction)
             adver_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
             final_loss_scalar = (
-                pub_recon_loss - priv_utility_tradeoff_coeff * adver_loss + kl_dig_hypr * kl_divergence.mean()
+                pub_recon_loss - (1/priv_utility_tradeoff_coeff) * adver_loss + kl_dig_hypr * kl_divergence.mean()
             )
 
             recon_losses.append(pub_recon_loss.mean().item())
@@ -187,10 +188,10 @@ def train_adversary(
     num_subsamples = min(ceil(epoch_sample_percent * global_samples.shape[0]), global_samples.shape[0])
     # TODO: test this out
     device = next(model_vae.parameters()).device
-    num_batches = ceil(global_samples.shape[0] / batch_size)
+    num_batches = global_samples.shape[0] 
 
     for e in range(epochs):
-        random_indices = torch.randint(0, global_samples.shape[0], (num_subsamples,), dtype=torch.long).to(device)
+        random_indices = torch.randperm(global_samples.shape[0])[:num_subsamples].to(device)
         subsamples = torch.index_select(global_samples, 0, random_indices)
         train_pub = subsamples[:, :, pub_cols]
         train_prv = subsamples[:, :, prv_cols]
@@ -209,7 +210,7 @@ def train_adversary(
             # WARNING: Check on that -1 seems sus.
             with torch.no_grad():
                  latent_z, sanitized_data, _ = model_vae(batch_all[:,:-1,:]) # Do not leak the last element of sequence
-            adversary_guess_flat = model_adversary(latent_z).flatten()
+            adversary_guess_flat = model_adversary(latent_z)
             # WARNING: Check on that -1 seems sus.
             batch_privTrue_flat = batch_prv[:, -1, :].view(-1, batch_prv.shape[-1])
 
@@ -232,6 +233,7 @@ def train_vae_and_adversary_bi_level(
     device: torch.device,
     ds_train: Dict[str, np.ndarray],
     ds_val: Dict[str, np.ndarray],
+    ds_test:  np.ndarray, # TOREM: After debugging
     epochs: int,
     inner_epochs: int,  # These are for the adversary
     epoch_sample_percent: float,
@@ -262,9 +264,6 @@ def train_vae_and_adversary_bi_level(
     # Shuffle, Batch, Torch Coversion, Feature Separation
     np.random.shuffle(all_train_seqs)
     np.random.shuffle(all_valid_seqs)
-    batch_amnt = all_train_seqs.shape[0] // batch_size
-    # all_train_seqs = all_train_seqs.reshape(batch_amnt, batch_size, all_train_seqs.shape[-2], all_train_seqs.shape[-1])
-    # all_valid_seqs = all_valid_seqs.reshape(batch_amnt, batch_size, all_valid_seqs.shape[-2], all_valid_seqs.shape[-1])
     all_train_seqs = torch.from_numpy(all_train_seqs).to(torch.float32).to(device)
     all_valid_seqs = torch.from_numpy(all_valid_seqs).to(torch.float32).to(device)
     train_pub = all_train_seqs[:, :, pub_columns]
@@ -282,7 +281,10 @@ def train_vae_and_adversary_bi_level(
     recon_losses = []
     adv_losses = []
     for e in tqdm(range(epochs), desc="Epochs"):
+        logger.info(f"Within epoch num {e}")
         for batch_no in tqdm(range(num_batches), desc="Batches"):
+
+            logger.info(f"Within batch num {batch_no}")
 
             # Now Get the new VAE generations
             batch_all = all_train_seqs[
@@ -303,10 +305,24 @@ def train_vae_and_adversary_bi_level(
                 opt_adversary,
                 inner_epochs,
                 epoch_sample_percent,
-                batch_all,
+                all_train_seqs,
                 total_num_features,
                 priv_columns,
                 batch_size,
+            )
+            # DEBUG: Check on adversaries performance
+            os.makedirs("./figures/progress/", exist_ok=True)
+            metrics = vae_test_file(
+                ds_test,
+                priv_columns,
+                model_vae,
+                model_adversary,
+                sequence_len,
+                -1,
+                batch_size,
+                wandb_on,
+                recon_savefig_loc=f"./figures/progress/vae_reconstruction_{e+1}.png",
+                adv_savefig_loc=f"./figures/progress/vae_adversary_{e+1}.png",
             )
 
             # Now we train the autoencoder to try to fool the adversary
@@ -316,11 +332,11 @@ def train_vae_and_adversary_bi_level(
             adversary_guess_flat = model_adversary(latent_z)
             # Check on performance
             batch_y_flat = batch_prv[:, -1, :].view(-1, batch_prv.shape[-1])
-            pub_recon_loss = F.mse_loss(sanitized_data, batch_pub[:, -1, :]) # Guesss the set of features of sequence
-            adver_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
+            pub_recon_loss = F.mse_loss(sanitized_data, batch_pub[:, -1, :], reduce=None).mean(-1) # Guesss the set of features of sequence
+            adver_loss = F.mse_loss(adversary_guess_flat, batch_y_flat, reduce=None).squeeze()
             final_loss_scalar = (
-                pub_recon_loss - priv_utility_tradeoff_coeff * adver_loss + kl_dig_hypr * kl_divergence.mean()
-            )
+                pub_recon_loss - priv_utility_tradeoff_coeff * adver_loss + kl_dig_hypr * kl_divergence
+            ).mean()
 
             recon_losses.append(pub_recon_loss.mean().item())
             adv_losses.append(adver_loss.mean().item())

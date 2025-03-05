@@ -197,6 +197,8 @@ def vae_test_file(
     padding_value: int,
     batch_size: int = 16,
     wandb_on: bool = False,
+    recon_savefig_loc: str = "./figures/vae_reconstruction.png",
+    adv_savefig_loc: str = "./figures/vae_adversary.png",
 ) -> Dict[str, float]:
     """
     Will run a validation iteration for a model
@@ -265,23 +267,24 @@ def vae_test_file(
     ########################################
 
     # Lets now save the figure
-    some_8_idxs = torch.randperm(seq_sanitized.shape[1])[:8]
+    permd_sanitized_idxs = torch.randperm(len(public_columns))[:8]
+    permd_original_idxs = torch.tensor([public_columns[idx] for idx in permd_sanitized_idxs]).to(torch.long)
 
-    recon_to_show = seq_sanitized[:, some_8_idxs]
-    truth_to_compare = test_file[:, some_8_idxs]
+    recon_to_show = seq_sanitized[:, permd_sanitized_idxs]
+    truth_to_compare = test_file[:, permd_original_idxs]
     fig,axs = plt.subplots(4,2,figsize=(32,20))
     for i in range(recon_to_show.shape[1]):
         mod = i % 4
         idx = i // 4
         axs[mod,idx].plot(recon_to_show[:,i].squeeze().detach().cpu().numpy(), label="Reconstruction")
-        axs[mod,idx].set_title(f"Reconstruction Vs Truth of $f_{some_8_idxs[i]}$")
+        axs[mod,idx].set_title(f"Reconstruction Vs Truth of $f_{permd_original_idxs[i]}$")
         axs[mod,idx].legend()
         axs[mod,idx].plot(truth_to_compare[:,i].squeeze(), label="Truth")
         axs[mod,idx].legend()
         if wandb_on:
             wandb.log({f"Reconstruction (Col {i})": recon_to_show[:,i].squeeze().detach().cpu().numpy()})
             wandb.log({f"Truth (Col {i})": truth_to_compare[:,i].squeeze().detach().cpu().numpy()})
-    plt.savefig(f"figures/vae_reconstruction.png")
+    plt.savefig(recon_savefig_loc)
     plt.close()
 
     ########################################
@@ -298,7 +301,7 @@ def vae_test_file(
     plt.title("Truth")
     plt.legend()
 
-    plt.savefig(f"figures/vae_adversary.png")
+    plt.savefig(adv_savefig_loc)
     plt.close()
 
     # Pass reconstruction and adversary to wandb
@@ -349,8 +352,8 @@ def get_tradeoff_metrics(
         ########################################
         # Sanitize the data
         ########################################
-        start_idx = batch_no * batch_size
-        end_idx = min((batch_no + 1) * batch_size, test_x.shape[0])
+        start_idx = batch_no * batch_size + sequence_length #  Sequence length to avoid padding
+        end_idx = min((batch_no + 1) * batch_size + sequence_length, test_x.shape[0])
         backhistory = collect_n_sequential_batches(test_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)
         backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
         with torch.no_grad():
