@@ -1,7 +1,7 @@
 import argparse
 import os
 from math import ceil
-from typing import Dict, List, OrderedDict, Tuple
+from typing import Dict, OrderedDict, Tuple
 
 import debugpy
 import matplotlib.pyplot as plt
@@ -9,23 +9,18 @@ import numpy as np
 import torch
 from rich import traceback
 from rich.console import Console
-from rich.live import Live
 from torch import nn
 from torch.nn import functional as F
-from torch.serialization import check_module_version_greater_or_equal
 from tqdm import tqdm
 import wandb
 from sklearn.decomposition import PCA
 
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
-from conrecon.data.dataset_generation import collect_n_sequential_batches, spot_backhistory
 from conrecon.dplearning.adversaries import Adversary, TrivialTemporalAdversary, PCATemporalAdversary
-from conrecon.dplearning.vae import SequenceToScalarVAE, SequenceToScalarVAE
-from conrecon.plotting import TrainLayout
+from conrecon.dplearning.vae import SequenceToScalarVAE
 from conrecon.utils import create_logger, set_seeds
-from conrecon.validation_functions import calculate_validation_metrics
 from conrecon.performance_test_functions import vae_test_file, triv_test_entire_file, pca_test_entire_file
-from conrecon.training_utils import train_vae_and_adversary, train_vae_and_adversary_bi_level
+from conrecon.training_utils import train_vae_and_adversary_bi_level
 
 traceback.install()
 
@@ -145,10 +140,10 @@ def compare_reconstruction():
     """
     raise NotImplementedError
 
-def plot_training_losses(recon_losses: List, adv_losses: List, fig_savedest: str):
+def plot_training_losses(recon_losses: list, adv_losses: list, fig_savedest: str):
     os.makedirs(os.path.dirname(fig_savedest), exist_ok=True)
     logger.info("Plotting the training losses")
-    fig, axs = plt.subplots(2, 1,  figsize=(16,10))
+    _, axs = plt.subplots(2, 1,  figsize=(16,10))
     plt.tight_layout()
     axs[0].plot(recon_losses)
     axs[0].set_title("Reconstruction Loss")
@@ -158,7 +153,7 @@ def plot_training_losses(recon_losses: List, adv_losses: List, fig_savedest: str
     plt.savefig(fig_savedest)
     plt.close()
 
-def plot_single_loss(single_loss: List, title: str, fig_savedest: str):
+def plot_single_loss(single_loss: list, title: str, fig_savedest: str):
     os.makedirs(os.path.dirname(fig_savedest), exist_ok=True)
     logger.info(f"Saving figure to {fig_savedest}")
     _, axs = plt.subplots(1,1, figsize=(16, 8))
@@ -169,16 +164,10 @@ def plot_single_loss(single_loss: List, title: str, fig_savedest: str):
     plt.close()
 
 
-# TODO: We need to implement federated learning in this particular part of the expression
-def federated():
-    # We also need a federated aspect to all this. And its getting close to being time to implementing this
-    raise NotImplementedError
-
-
 def triv_calculate_validation_metrics(
     all_features: torch.Tensor,
-    pub_features_idxs: List[int],
-    prv_features_idxs: List[int],
+    pub_features_idxs: list[int],
+    prv_features_idxs: list[int],
     model_adversary: nn.Module,
 ) -> Dict[str, float]:
     """
@@ -201,12 +190,11 @@ def triv_calculate_validation_metrics(
 def baseline_trivial_correlation(
     ds_train: OrderedDict[str, np.ndarray],
     ds_val: OrderedDict[str, np.ndarray],
-    all_columns: List[str],
-    prv_features_idxs: List[int],
+    all_columns: list[str],
+    prv_features_idxs: list[int],
     batch_size,
     epochs: int,
     lr: float,
-    ds_test: np.ndarray,
     device: torch.device,
 ):
     """
@@ -292,7 +280,6 @@ def main():
     logger = create_logger("main_training")
 
     if args.wandb:
-        wandb_on = True
         wandb.init(project="private_control", config=args)
 
     if args.debug:

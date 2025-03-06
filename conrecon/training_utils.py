@@ -193,7 +193,6 @@ def train_adversary(
     for e in range(epochs):
         random_indices = torch.randperm(global_samples.shape[0])[:num_subsamples].to(device)
         subsamples = torch.index_select(global_samples, 0, random_indices)
-        train_pub = subsamples[:, :, pub_cols]
         train_prv = subsamples[:, :, prv_cols]
 
         for batch_no in range(num_batches):
@@ -251,7 +250,6 @@ def train_vae_and_adversary_bi_level(
 
     total_num_features = len(data_columns)
     pub_columns = list(set(range(total_num_features)) - set(priv_columns))
-    device = next(model_vae.parameters()).device
 
     train_pub = all_train_seqs[:, :, pub_columns]
     train_prv = all_train_seqs[:, :, priv_columns]
@@ -268,11 +266,7 @@ def train_vae_and_adversary_bi_level(
     recon_losses = []
     adv_losses = []
     for e in tqdm(range(epochs), desc="Epochs"):
-        logger.info(f"Within epoch num {e}")
         for batch_no in tqdm(range(num_batches), desc="Batches"):
-
-            logger.info(f"Within batch num {batch_no}")
-
             # Now Get the new VAE generations
             batch_all = all_train_seqs[
                 batch_no * batch_size : (batch_no + 1) * batch_size
