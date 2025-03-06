@@ -13,7 +13,7 @@ from conrecon.dplearning.adversaries import Adversary
 from conrecon.dplearning.vae import SequenceToScalarVAE
 from conrecon.utils import create_logger, set_seeds
 from conrecon.performance_test_functions import get_tradeoff_metrics
-from conrecon.training_utils import train_vae_and_adversary, train_vae_and_adversary_bi_level
+from conrecon.training_utils import train_vae_and_adversary_bi_level
 
 def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
@@ -56,7 +56,7 @@ def argsies() -> argparse.Namespace:
         type=float,
         help="The threshold for retaining principal components",
     )
-    ap.add_argument("--kl_dig_hypr", "-k", default=0.001, type=float) # type: ignore 
+    ap.add_argument("--kl_dig_hypr", "-k", default=0.001, type=float)
     ap.add_argument("--seed", default=0, type=int) 
     ap.add_argument("--debug", "-d", action="store_true", help="Whether or not to use debugpy for trainig") 
     ap.add_argument("--debug_port", default=42022, help="Port to use for debugging") 
@@ -74,7 +74,7 @@ def plot_pareto_frontier(privacies: list[float], utilities: list[float], uvp_tra
     sns.set_context("paper", font_scale=1.5)
     
     # Create the main scatter plot with improved aesthetics
-    scatter = sns.scatterplot(x=privacies, y=utilities, 
+    _ = sns.scatterplot(x=privacies, y=utilities, 
                             color='#2E86C1',  # Professional blue color
                             s=100,  # Marker size
                             alpha=0.7)  # Slight transparency
@@ -115,7 +115,7 @@ def main():
         debugpy.wait_for_client()
 
     # TODO: Make it  so that generate_dataset checks if params are the same
-    columns, runs_dict, debug_file = load_defacto_data(args.defacto_data_raw_path)
+    columns, runs_dict, _ = load_defacto_data(args.defacto_data_raw_path)
     num_columns = len(columns)
     num_private_cols = len(args.cols_to_hide)
     num_public_cols = num_columns - num_private_cols
