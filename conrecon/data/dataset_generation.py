@@ -1,6 +1,6 @@
 from ..utils import create_logger
 from ..ss_generation import SSParam
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 import os
 import pickle
 import pandas as pd
@@ -8,6 +8,7 @@ import numpy as np
 from dataclasses import dataclass
 from sktime.libs.pykalman import KalmanFilter
 from tqdm import tqdm
+import torch
 
 logger = create_logger("dataset_generation")
 
@@ -192,12 +193,12 @@ def batch_generation_randUni(
 
 
 def collect_n_sequential_batches(
-    dataset: np.ndarray,
+    dataset: torch.Tensor,
     start_idx: int,
     end_idx: int,
     sequence_length: int,
-    padding_value: int,
-):
+    padding_value: Optional[int],
+) -> torch.Tensor:
     """
     Will take a validation file and get sequential batches
     Args:
@@ -209,18 +210,23 @@ def collect_n_sequential_batches(
     """
     rollouts = []
     # Make a list out of the slice
+    if start_idx < sequence_length - 1 and padding_value is None:
+        raise ValueError(f"start_idx:{start_idx} > sequence_length:{sequence_length} - 1 and no padding value was provided")
+    else: # We dont need padding value but we write one for the lsp to be at peace
+        padding_value = 0
+
     for spot in range(start_idx, end_idx):
         history = spot_backhistory(
             spot, sequence_length, dataset, padding_value
         )
         rollouts.append(history)
-    rollouts = np.stack(rollouts, axis=0)
+    rollouts = torch.stack(rollouts, axis=0)
     return rollouts
     
 
 
 def spot_backhistory(
-    spot: int, sequence_len: int, run: np.ndarray, padding_value: int
+    spot: int, sequence_len: int, run: torch.Tensor, padding_value: int
 ) -> np.ndarray:
     """
     Args:

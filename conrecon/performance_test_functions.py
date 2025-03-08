@@ -1,5 +1,5 @@
 import os
-from typing import Sequence, Dict, Tuple
+from typing import Optional, Sequence, Dict, Tuple
 from math import ceil
 import logging
 
@@ -91,9 +91,9 @@ def pca_test_entire_file(
     test_file: np.ndarray,
     prv_features_idxs: Sequence[int],
     model_adversary: nn.Module,
-    principal_components: np.ndarray,
+    principal_components: torch.Tensor,
     sequence_length: int,
-    padding_value: int,
+    padding_value: Optional[int],
     logger: logging.Logger,
     batch_size: int = 16,
     wandb_on: bool = False,
@@ -127,9 +127,8 @@ def pca_test_entire_file(
         ########################################
         start_idx = batch_no * batch_size + sequence_length
         end_idx = min((batch_no + 1) * batch_size + sequence_length, val_x.shape[0]) 
-        backhistory = collect_n_sequential_batches(val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)[:,:,pub_features_idxs]
-        projected_backhistory = backhistory.dot(principal_components.T)
-        projected_backhistory = torch.from_numpy(projected_backhistory).to(torch.float32).to(device)
+        backhistory = collect_n_sequential_batches(val_x, start_idx, end_idx, sequence_length, padding_value)[:,:,pub_features_idxs]
+        projected_backhistory = torch.matmul(backhistory, principal_components.T)
 
         # TODO: Incorporate Adversary Guess
         with torch.no_grad():
@@ -354,12 +353,9 @@ def get_tradeoff_metrics(
         ########################################
         start_idx = batch_no * batch_size + sequence_length #  Sequence length to avoid padding
         end_idx = min((batch_no + 1) * batch_size + sequence_length, test_x.shape[0])
-        backhistory = collect_n_sequential_batches(test_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)
-        backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
+        backhistory = collect_n_sequential_batches(test_x, start_idx, end_idx, sequence_length, padding_value)
         with torch.no_grad():
             latent_z, sanitized_data, kl_divergence = model_vae(backhistory)
-
-        with torch.no_grad():
             adversary_guess = model_adversary(latent_z)
         batch_guesses.append(adversary_guess)
         batch_reconstructions.append(sanitized_data)

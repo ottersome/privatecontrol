@@ -57,7 +57,7 @@ def baseline_pca_decorrelation(
     lr: float,
     device: torch.device,
     wandb_on: bool,
-) -> tuple[nn.Module, np.ndarray]:
+) -> tuple[nn.Module, torch.Tensor]:
     pca = PCA()
 
     ########################################
@@ -76,7 +76,6 @@ def baseline_pca_decorrelation(
     # Shuffle, Batch, Torch Coversion, Feature Separation
     
     all_train_seqs_tensor = torch.from_numpy(all_train_seqs_np).to(torch.float32).to(device)
-    all_valid_seqs_tensor = torch.from_numpy(all_valid_seqs_np).to(torch.float32).to(device)
 
     train_pub_flat = train_pub_np.reshape(-1, train_pub_np.shape[-1])
     train_pub_centered = train_pub_flat - np.mean(train_pub_flat, axis=0)
@@ -129,8 +128,7 @@ def baseline_pca_decorrelation(
         for batch_no in tqdm(range(num_batches), desc="Batches"):
             # Now Get the new VAE generations
             batch_pub = sanitized_projections_for_training[batch_no * batch_size : (batch_no + 1) * batch_size]
-            _ = train_prv[batch_no * batch_size : (batch_no + 1) * batch_size] # TOREM:
-            all_feats = all_train_seqs[batch_no * batch_size : (batch_no + 1) * batch_size]
+            all_feats = all_train_seqs_tensor[batch_no * batch_size : (batch_no + 1) * batch_size]
 
             adversary_guess = adversary(batch_pub).squeeze()
 
@@ -153,7 +151,7 @@ def baseline_pca_decorrelation(
     plt.savefig(f"./figures/pca_recon_losses.png")
     plt.close()
 
-    return adversary, retained_components
+    return adversary, torch.from_numpy(retained_components)
 
 def pca_decomposition_w_heatmap(
     ds_train: OrderedDict[str, np.ndarray],
@@ -249,6 +247,14 @@ def pca_decomposition_w_heatmap(
     plt.close()
 
 def main(args: argparse.Namespace):
+
+    if args.debug:
+        print("Waiting for debugger to attach...")
+        debugpy.listen(("0.0.0.0", 42022))
+        debugpy.wait_for_client()
+        print("Debugger attached.")
+
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device {device}")
     ########################################
@@ -297,7 +303,7 @@ def main(args: argparse.Namespace):
         pca_model_adversary,
         retained_components,
         args.episode_length,
-        args.padding_value,
+        None,
         logger,
         args.batch_size,
         wandb_on=args.wandb_on
