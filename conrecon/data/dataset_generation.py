@@ -8,6 +8,7 @@ import numpy as np
 from dataclasses import dataclass
 from sktime.libs.pykalman import KalmanFilter
 from tqdm import tqdm
+import torch
 
 logger = create_logger("dataset_generation")
 
@@ -192,7 +193,7 @@ def batch_generation_randUni(
 
 
 def collect_n_sequential_batches(
-    dataset: np.ndarray,
+    dataset: torch.Tensor,
     start_idx: int,
     end_idx: int,
     sequence_length: int,
@@ -214,13 +215,13 @@ def collect_n_sequential_batches(
             spot, sequence_length, dataset, padding_value
         )
         rollouts.append(history)
-    rollouts = np.stack(rollouts, axis=0)
+    rollouts = torch.stack(rollouts, axis=0)
     return rollouts
     
 
 
 def spot_backhistory(
-    spot: int, sequence_len: int, run: np.ndarray, padding_value: int
+    spot: int, sequence_len: int, run: torch.Tensor, padding_value: int
 ) -> np.ndarray:
     """
     Args:

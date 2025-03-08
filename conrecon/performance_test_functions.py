@@ -354,12 +354,9 @@ def get_tradeoff_metrics(
         ########################################
         start_idx = batch_no * batch_size + sequence_length #  Sequence length to avoid padding
         end_idx = min((batch_no + 1) * batch_size + sequence_length, test_x.shape[0])
-        backhistory = collect_n_sequential_batches(test_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)
-        backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
+        backhistory = collect_n_sequential_batches(test_x, start_idx, end_idx, sequence_length, padding_value)
         with torch.no_grad():
             latent_z, sanitized_data, kl_divergence = model_vae(backhistory)
-
-        with torch.no_grad():
             adversary_guess = model_adversary(latent_z)
         batch_guesses.append(adversary_guess)
         batch_reconstructions.append(sanitized_data)

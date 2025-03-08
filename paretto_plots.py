@@ -117,7 +117,7 @@ def main(args: argparse.Namespace):
     for i, uvp in enumerate(uvps):
         texts.append(
             ax.annotate(
-                f"UVP: {uvp:.2f}",
+                f"UVP: {uvp:.3f}",
                 (privacies[i], utilities[i]),
                 fontsize=8,
                 # arrowprops=dict(
