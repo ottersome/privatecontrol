@@ -4,6 +4,7 @@ File to help interpret the results from the paretto simulations
 import argparse
 import os
 
+from adjustText import adjust_text
 import numpy as np
 from scipy import interpolate
 import seaborn as sns
@@ -88,67 +89,94 @@ def paretto_frontier(
  
 
 def main(args: argparse.Namespace):
+    # Set the style globally for the entire plot
+    plt.style.use('seaborn-v0_8-paper')
+    sns.set_context("paper", font_scale=1.5)
+    
     # Import data
     data_dir = args.data_dir
     privacies = np.load(os.path.join(data_dir, "privacies.npy"))
     utilities = np.load(os.path.join(data_dir, "utilities.npy"))
     uvps = np.load(os.path.join(data_dir, "uvp.npy"))
-    # privacies = np.log(privacies)
-    # utilities = -np.log(-utilities)
-    # For now lets normalize the utilities
 
+    # Calculate Pareto frontier
     left_hull_x, left_hull_y = paretto_frontier(privacies, utilities, uvps)
 
-    print(f"Privacies are {privacies}")
-    print(f"Utilities are {utilities}")
-
-    # Plot the pareto frontier
-    plt.figure(figsize=(16, 12))  # Standard figure size for paper columns
-    plt.tight_layout()
+    # Create figure with appropriate size for paper
+    fig, ax = plt.subplots(figsize=(8, 6))  # Standard single-column figure size
     
-    # Set the style for academic publications
-    # plt.style.use("seaborn-whitegrid")
-    sns.set_style("whitegrid")
-    sns.set_context("paper")
-    
-    # Create the main scatter plot with improved aesthetics
-    _ = plt.scatter(privacies, utilities, 
-                    color='#2E86C1',  # Professional blue color
-                    s=100,  # Marker size
-                    alpha=0.7)  # Slight transparency
+    # Create the main scatter plot
+    scatter = ax.scatter(privacies, utilities, 
+                        color='#2E86C1',  # Professional blue color
+                        s=80,  # Marker size
+                        alpha=0.7,  # Slight transparency
+                        label='Data points')
 
-    # # Setup logarithmic scale axis
-    # plt.xscale("log", base=10)
-    # plt.yscale("log", base=10)   
-
-    
-    # Add annotations with improved positioning and style
+    # Add annotations for UVP values
+    texts = []
     for i, uvp in enumerate(uvps):
-        plt.annotate(f"UVP: {uvp:.4f}", 
-                    (privacies[i], utilities[i]),
-                    xytext=(8, 8),
-                    textcoords='offset points',
-                    fontsize=10,
-                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
-    
+        texts.append(
+            ax.annotate(
+                f"UVP: {uvp:.2f}",
+                (privacies[i], utilities[i]),
+                fontsize=8,
+                # arrowprops=dict(
+                #     arrowstyle='->',
+                #     color='gray',
+                #     alpha=0.6
+                # )
+            )
+        )
 
-    plt.plot(left_hull_x, left_hull_y, 'g-', label='Pareto frontier curve')
+    # Plot Pareto frontier
+    ax.plot(left_hull_x, left_hull_y, 
+            color='#27AE60',  # Professional green color
+            linestyle='--',
+            alpha=0.8,
+            linewidth=2,
+            label='Pareto frontier')
     
     # Customize the plot
-    plt.title("Privacy-Utility Trade-off Analysis", pad=20)
-    plt.xlabel("Privacy Score", labelpad=10)
-    plt.ylabel("Utility Score", labelpad=10)
+    ax.set_title("Privacy-Utility Trade-off Analysis", 
+                 pad=20, 
+                 fontsize=14, 
+                 fontweight='bold')
+    ax.set_xlabel("Privacy Score (MSE)", labelpad=10)
+    ax.set_ylabel("Utility Score (Negative MSE)", labelpad=10)
     
-    # Adjust layout to prevent label clipping
+    # Add grid with proper styling
+    ax.grid(True, linestyle='--', alpha=0.3)
+    
+    # Add legend
+    ax.legend(frameon=True, 
+             facecolor='white', 
+             edgecolor='none',
+             loc='best')
+
+    # Adjust text annotations to prevent overlap
+    adjust_text(
+        texts,
+        expand_points=(1.5, 1.5),
+        arrowprops=dict(arrowstyle='->', color='gray', alpha=0.6),
+        force_points=(0.5, 0.5),
+        force_text=(0.5, 0.5),
+        ax=ax
+    )
+
+    # Adjust layout
     plt.tight_layout()
     
     # Save with high DPI for print quality
-    print(f"Saving to {args.saveplot_dest}")
-    plt.savefig(args.saveplot_dest, 
-                dpi=300, 
-                bbox_inches='tight',
-                facecolor='white')
-    plt.show()
+    plt.savefig(
+        args.saveplot_dest,
+        dpi=300,
+        bbox_inches='tight',
+        facecolor='white',
+        format='png'  # PDF format for vector graphics
+    )
+    
+    # Show the plot
+    # plt.show()
     plt.close()
 
 if __name__ == "__main__":
