@@ -372,4 +372,4 @@ def get_tradeoff_metrics(
     recon_mse = torch.mean((seq_reconstructions - test_pub) ** 2)
     adv_mse = torch.mean((seq_guesses - test_prv) ** 2)
 
-    return  adv_mse.item(),recon_mse.item()
+    return  adv_mse.item(),-1*recon_mse.item()
