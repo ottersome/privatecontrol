@@ -51,10 +51,11 @@ def argsies() -> argparse.Namespace:
 
     return ap.parse_args()
 
-def baseline_pca_decorrelation(
-    ds_train: OrderedDict[str, np.ndarray],
-    ds_val: OrderedDict[str, np.ndarray],
-    prv_features_idxs: list[int],
+def baseline_pca_decorr_adversary(
+    principal_components: np.ndarray,
+    pub_pc_projected: np.ndarray,
+    train_prv: np.ndarray,
+    train_pub: np.ndarray,
     batch_size: int,
     correlation_threshold: float,
     epochs: int,
@@ -62,57 +63,19 @@ def baseline_pca_decorrelation(
     device: torch.device,
     wandb_on: bool,
 ) -> tuple[nn.Module, torch.Tensor, np.ndarray]:
-    pca = PCA()
 
-    ########################################
-    # Bunch of data processing.
-    ########################################
-    first_key = list(ds_train.keys())[0]
-    num_features = ds_train[first_key].shape[-1]
-    pub_features_idxs = list(set(range(num_features)) - set(prv_features_idxs))
-    sequence_length = ds_train[first_key].shape[1]
-
-    # We need to concatenate the features as usual 
-    all_train_seqs_np = np.concatenate([ seqs for _, seqs in ds_train.items()], axis=0)
-    all_valid_seqs_np = np.concatenate([ seqs for _, seqs in ds_val.items()], axis=0)
-    train_pub_np = all_train_seqs_np[:,:,pub_features_idxs]
-    train_prv_np = all_train_seqs_np[:,:,prv_features_idxs].squeeze()
-    # Shuffle, Batch, Torch Coversion, Feature Separation
-    
-    all_train_seqs_tensor = torch.from_numpy(all_train_seqs_np).to(torch.float32).to(device)
-
-    train_pub_flat = train_pub_np.reshape(-1, train_pub_np.shape[-1])
+    # Prepping some data
+    train_prv_flat = train_prv.reshape(-1, train_prv.shape[-1])
+    train_pub_flat = train_pub.reshape(-1, train_pub.shape[-1])
     train_pub_centered = train_pub_flat - np.mean(train_pub_flat, axis=0)
-    train_prv_flat = train_prv_np.reshape(-1)
-
-    ########################################
-    # PCA Fitting
-    ########################################
-    pca_transform = pca.fit(train_pub_flat)
-    # Shape is (num_components, num_features), fyi for indexing purposes
-    principal_components = pca_transform.components_
-    # Takes in (num_componets, num_features) and returns (num_components, num_samples)
-    pub_pc_projected = train_pub_centered.dot(principal_components.T)
-
-    # Plot principal components as matrix for debugging and save them in figures/pca_components
-    fig, axs = plt.subplots(1, 1, figsize=(16,4))
-    im = axs.matshow(principal_components.T, cmap='viridis')
-    axs.set_title("$M_{PU}$: Public to Private Features HeatMap")
-    axs.set_xlabel("Public Features")
-    axs.set_ylabel("Private Features")
-    axs.set_yticks([])
-    axs.set_xticks(np.arange(0, len(principal_components.T), 1) + 1)
-    plt.colorbar(im)
-    plt.savefig("./figures/pca_components.png")
-    plt.close()
-
+    sequence_length = train_pub.shape[1]
+    num_features = train_pub.shape[-1]
 
     ########################################
     # Check on correlations
     ########################################
     retained_components = []
     all_pc_corr_scores = []
-    inspect_array("Before", train_prv_flat)
     for i in range(principal_components.shape[0]):
         pc_i_timeseries = pub_pc_projected[:,i]
         corr_i = np.corrcoef(pc_i_timeseries, train_prv_flat)[0,1]
@@ -123,6 +86,7 @@ def baseline_pca_decorrelation(
 
             retained_components.append(principal_components[i])
 
+    # For debugging mostly
     all_pc_corr_scores = np.array(all_pc_corr_scores)
 
     retained_components = np.array(retained_components)
@@ -153,7 +117,7 @@ def baseline_pca_decorrelation(
         for batch_no in tqdm(range(num_batches), desc="Batches"):
             # Now Get the new VAE generations
             batch_pub = sanitized_projections_for_training[batch_no * batch_size : (batch_no + 1) * batch_size]
-            all_feats = all_train_seqs_tensor[batch_no * batch_size : (batch_no + 1) * batch_size]
+            all_feats = all_train_seqs[batch_no * batch_size : (batch_no + 1) * batch_size]
 
             adversary_guess = adversary(batch_pub).squeeze()
 
@@ -178,48 +142,53 @@ def baseline_pca_decorrelation(
 
     return adversary, torch.from_numpy(retained_components), all_pc_corr_scores
 
-def pca_decomposition_w_heatmap(
-    ds_train: OrderedDict[str, np.ndarray],
-    test_file: np.ndarray,
-    prv_features_idxs: List[int],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def pca_preprocessing(
+    train_all: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
     """
-    This will create a matrix M_{up} that will help us convert public components into private components.
-    returns: private_guess, test_prv, M_PU
-    """
+    Will preprocess the data for PCA
+    args:
+        - train_all: All data (public + private)
+    returns:
+        - pca_components: Principal Components
+        - pca_projected_ds: Projected Public data onto the principal components
+    """ 
+
     pca = PCA()
+    train_all_flat = train_all.reshape(-1, train_all.shape[-1])
+    train_all_centered = train_all_flat - np.mean(train_all_flat, axis=0)
 
-    first_key = list(ds_train.keys())[0]
-    num_features = ds_train[first_key].shape[-1]
-    pub_features_idxs = list(set(range(num_features)) - set(prv_features_idxs))
-    sequence_length = ds_train[first_key].shape[1]
-
-    # We need to concatenate the features as usual 
-    all_train_seqs = np.concatenate([ seqs for _, seqs in ds_train.items()], axis=0)
-    # Shuffle, Batch, Torch Coversion, Feature Separation
-    
-    train_pub = all_train_seqs[:,:,pub_features_idxs]
-    train_prv = all_train_seqs[:,:,prv_features_idxs]
-    train_pub_flat = train_pub.reshape(-1, train_pub.shape[-1])
-    train_prv_flat = train_prv.reshape(-1, train_prv.shape[-1])
-    train_pub_centered = train_pub_flat - np.mean(train_pub_flat, axis=0)
-    train_pub_mean = np.mean(train_pub_flat, axis=0)
-
-    #  Now we can start fitting the pca 
-    pca_transform = pca.fit(train_pub_centered)
+    ########################################
+    # PCA Fitting
+    ########################################
+    pca_transform = pca.fit(train_all_centered)
     # Shape is (num_components, num_features), fyi for indexing purposes
     principal_components = pca_transform.components_
     # Takes in (num_componets, num_features) and returns (num_components, num_samples)
-    C = train_pub_centered.dot(principal_components.T)
+    pca_projected_ds = train_all_centered.dot(principal_components.T)
+
+    return principal_components, pca_projected_ds
+
+def pca_decomposition_w_heatmap(
+    pca_components: np.ndarray,
+    pca_projected_ds: np.ndarray,
+    train_prv: np.ndarray,
+) -> np.ndarray:
+    """
+    This will create a matrix M_{up} that will help us convert public components into private components.
+    returns: M_UI
+    """
+    train_prv_flat = train_prv.reshape(-1, train_prv.shape[-1])
+    C = pca_projected_ds
 
     # The projection matrix from public to latent space
-    M_CP = pca.components_.T  # shape: (M, K)
+    M_ul = pca_components.T # (Num latent components, components size / num features)
 
     # ----- Step 2: Solve for M_CU via linear regression -----
     # We assume X_U \approx C @ M_CU
     # M_CU has shape (K, N-M)
     # Using np.linalg.lstsq to solve: M_CU = argmin ||C @ M - X_U||^2
-    M_CU, residuals, rank, s = np.linalg.lstsq(C, train_prv_flat, rcond=None)
+    M_li, residuals, rank, s = np.linalg.lstsq(C, train_prv_flat, rcond=None)
 
     # ----- (Optional) Directly check (C^T C) invertibility -----
     # If C^T C is singular or near-singular, direct inversion is problematic
@@ -232,22 +201,10 @@ def pca_decomposition_w_heatmap(
         print("C^T C is singular or not well-conditioned.")
 
     # ----- Step 3: Compute the final M_PU = M_CP @ M_CU -----
-    M_PU = M_CP @ M_CU  # shape: (M, N-M)
+    M_UI = M_ul @ M_li  # shape: (M, N-M) i.e. (num_public_components, num_private_components)
 
-    print("M_CP shape:", M_CP.shape)
-    print("M_CU shape:", M_CU.shape)
-    print("M_PU shape:", M_PU.shape)
+    return  M_UI
 
-    ########################################
-    # Run Evaluation on test set
-    ########################################
-    # Now for validation
-    test_pub = test_file[:,pub_features_idxs]
-    test_prv = test_file[:,prv_features_idxs]
-    test_pub_centered = test_pub # - train_pub_mean
-    private_guess = test_pub_centered.dot(M_PU)
-
-    return private_guess, test_prv, M_PU
 
 def plot_heatmap_and_correlation(private_guess, test_prv, M_PU, all_pc_corr_scores):
     # Now we plot the results
@@ -307,33 +264,56 @@ def main(args: argparse.Namespace):
         args.oversample_coefficient,
         True, # Scale
     )
+    all_train_seqs = np.concatenate([ seqs for _, seqs in train_seqs.items()], axis=0)
+    num_features = all_train_seqs.shape[-1]
+    num_pca_components = num_features
+    prv_features_idxs = args.cols_to_hide
+    pub_features_idxs = list(set(range(num_features)) - set(prv_features_idxs))
+    print(f"Public features are {pub_features_idxs}")
+    print(f"Private features are {prv_features_idxs}")
+    train_pub = all_train_seqs[:,:,pub_features_idxs]
+    train_prv = all_train_seqs[:,:,prv_features_idxs]
+
+    test_pub = test_file[:,pub_features_idxs]
+    test_prv = test_file[:,prv_features_idxs]
+
+    ########################################
+    # PCA Preprocessing
+    ########################################
+    logger.info("Starting the PCA preprocessing")
+    pca_components, pca_projected_ds = pca_preprocessing(
+        train_pub,
+        train_prv,
+    )
 
     ########################################
     # PCA Decomposition with heatmap
     ########################################
     logger.info("Creating the decomposition with heatmap")
     private_guess, test_prv, M_PU = pca_decomposition_w_heatmap(
-        train_seqs,
-        test_file,
-        args.cols_to_hide,
+        pca_components,
+        pca_projected_ds,
+        train_prv,
     )
     ########################################
     # Training the PCA based baseline
     ########################################
     # TOREM: Move this lower down for when we are done with it. 
     logger.info("Starting the PCA decorrelation and training")
-    pca_model_adversary, retained_components, all_pc_corr_scores = baseline_pca_decorrelation(
-        train_seqs,
-        val_seqs,
-        args.cols_to_hide,
+    pca_model_adversary, retained_components, all_pc_corr_scores = baseline_pca_decorr_adversary(
+        pca_components,
+        pca_projected_ds,
+        all_train_seqs,
+        train_prv,
+        train_pub,
         args.batch_size,
         args.correlation_threshold,
         args.epochs,
         args.lr,
-        device,
-        args.wandb_on
+        args.device,
+        args.wandb_on,
     )
-    plot_heatmap_and_correlation(private_guess, test_prv, M_PU, all_pc_corr_scores)
+    # plot_heatmap_and_correlation(private_guess, test_prv, M_PU, all_pc_corr_scores)
 
     # retained_components = retained_components.to(device).to(torch.float32)
     # logger.info("PCA training and decorrelation complete. Now testing...")
