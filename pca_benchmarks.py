@@ -2,6 +2,7 @@ import argparse
 from math import ceil
 from typing import List, OrderedDict
 
+import debugpy
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -13,7 +14,7 @@ import wandb
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.adversaries import PCATemporalAdversary
 from conrecon.performance_test_functions import pca_test_entire_file
-from conrecon.utils import create_logger
+from conrecon.utils import create_logger, set_seeds
 
 
 def argsies() -> argparse.Namespace:
@@ -44,6 +45,9 @@ def argsies() -> argparse.Namespace:
     ap.add_argument("--batch_size", "-b", default=64, type=int)
     ap.add_argument("--epochs", "-e", type=int, default=100)
     ap.add_argument("--lr", type=float, default=0.001, help="Learning Rate (default: 0.001)")
+    ap.add_argument("--debug", "-d", action="store_true", help="Wheter to active debugpy mode.")
+    ap.add_argument("--device", default="cuda", type=str, help="What device to use")
+    ap.add_argument("--seed", default=0, type=int, help="What device to use")
 
     return ap.parse_args()
 
@@ -57,7 +61,7 @@ def baseline_pca_decorrelation(
     lr: float,
     device: torch.device,
     wandb_on: bool,
-) -> tuple[nn.Module, torch.Tensor]:
+) -> tuple[nn.Module, torch.Tensor, np.ndarray]:
     pca = PCA()
 
     ########################################
@@ -88,17 +92,38 @@ def baseline_pca_decorrelation(
     # Shape is (num_components, num_features), fyi for indexing purposes
     principal_components = pca_transform.components_
     # Takes in (num_componets, num_features) and returns (num_components, num_samples)
-    pub_pc_scores = train_pub_flat.dot(principal_components.T)
+    pub_pc_projected = train_pub_centered.dot(principal_components.T)
+
+    # Plot principal components as matrix for debugging and save them in figures/pca_components
+    fig, axs = plt.subplots(1, 1, figsize=(16,4))
+    im = axs.matshow(principal_components.T, cmap='viridis')
+    axs.set_title("$M_{PU}$: Public to Private Features HeatMap")
+    axs.set_xlabel("Public Features")
+    axs.set_ylabel("Private Features")
+    axs.set_yticks([])
+    axs.set_xticks(np.arange(0, len(principal_components.T), 1) + 1)
+    plt.colorbar(im)
+    plt.savefig("./figures/pca_components.png")
+    plt.close()
+
 
     ########################################
     # Check on correlations
     ########################################
     retained_components = []
+    all_pc_corr_scores = []
+    inspect_array("Before", train_prv_flat)
     for i in range(principal_components.shape[0]):
-        pc_i_scores = pub_pc_scores[:,i]
-        corr_i = np.corrcoef(pc_i_scores, train_prv_flat)[0,1]
+        pc_i_timeseries = pub_pc_projected[:,i]
+        corr_i = np.corrcoef(pc_i_timeseries, train_prv_flat)[0,1]
+        all_pc_corr_scores.append(corr_i)
+        # ensure corr_i is not nan
+        assert not np.isnan(corr_i)
         if abs(corr_i) <= correlation_threshold:
+
             retained_components.append(principal_components[i])
+
+    all_pc_corr_scores = np.array(all_pc_corr_scores)
 
     retained_components = np.array(retained_components)
     # Project the data onto the retained components
@@ -151,15 +176,16 @@ def baseline_pca_decorrelation(
     plt.savefig(f"./figures/pca_recon_losses.png")
     plt.close()
 
-    return adversary, torch.from_numpy(retained_components)
+    return adversary, torch.from_numpy(retained_components), all_pc_corr_scores
 
 def pca_decomposition_w_heatmap(
     ds_train: OrderedDict[str, np.ndarray],
     test_file: np.ndarray,
     prv_features_idxs: List[int],
-):
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     This will create a matrix M_{up} that will help us convert public components into private components.
+    returns: private_guess, test_prv, M_PU
     """
     pca = PCA()
 
@@ -221,6 +247,9 @@ def pca_decomposition_w_heatmap(
     test_pub_centered = test_pub # - train_pub_mean
     private_guess = test_pub_centered.dot(M_PU)
 
+    return private_guess, test_prv, M_PU
+
+def plot_heatmap_and_correlation(private_guess, test_prv, M_PU, all_pc_corr_scores):
     # Now we plot the results
     plt.figure(figsize=(16,10))
     plt.plot(private_guess.squeeze(), label="Reconstruction")
@@ -229,20 +258,28 @@ def pca_decomposition_w_heatmap(
     plt.legend()
     plt.savefig("./figures/mcu_reconstruction.png")
     plt.close()
-
-
-    # We will now pass it through MPU
-
     ########################################
     # Plot the HeatMap
     ########################################
-    fig, axs = plt.subplots(1, 1, figsize=(16,4))
-    im = axs.matshow(M_PU.T, cmap='viridis')
-    axs.set_title("$M_{PU}$: Public to Private Features HeatMap")
-    axs.set_xlabel("Public Features")
-    axs.set_ylabel("Private Features")
-    axs.set_yticks([])
-    plt.colorbar(im)
+    fig, axs = plt.subplots(2, 1, figsize=(16,8))
+    
+    # Upper subplot: Heatmap
+    im = axs[0].matshow(M_PU.T, cmap='viridis')
+    axs[0].set_title("$M_{PU}$: Public to Private Features HeatMap")
+    axs[0].set_xlabel("Public Features")
+    axs[0].set_ylabel("Private Features")
+    axs[0].set_yticks([])
+    # axs[0].set_xticks(np.arange(0, len(M_PU.T), 1) + 1)
+    plt.colorbar(im, ax=axs[0])
+    
+    # Lower subplot: Bar plot
+    axs[1].bar(range(len(all_pc_corr_scores)), all_pc_corr_scores)
+    axs[1].set_title("Correlation Scores")
+    axs[1].set_xlabel("Public Features")
+    axs[1].set_ylabel("Correlation Score")
+    axs[1].set_xticks(np.arange(0, len(all_pc_corr_scores), 1))
+    
+    plt.tight_layout()
     plt.savefig("./figures/pca_heatmap.png")
     plt.close()
 
@@ -254,6 +291,7 @@ def main(args: argparse.Namespace):
         debugpy.wait_for_client()
         print("Debugger attached.")
 
+    set_seeds(args.seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device {device}")
@@ -274,18 +312,17 @@ def main(args: argparse.Namespace):
     # PCA Decomposition with heatmap
     ########################################
     logger.info("Creating the decomposition with heatmap")
-    meep = pca_decomposition_w_heatmap(
+    private_guess, test_prv, M_PU = pca_decomposition_w_heatmap(
         train_seqs,
         test_file,
         args.cols_to_hide,
     )
-
     ########################################
     # Training the PCA based baseline
     ########################################
     # TOREM: Move this lower down for when we are done with it. 
     logger.info("Starting the PCA decorrelation and training")
-    pca_model_adversary, retained_components = baseline_pca_decorrelation(
+    pca_model_adversary, retained_components, all_pc_corr_scores = baseline_pca_decorrelation(
         train_seqs,
         val_seqs,
         args.cols_to_hide,
@@ -296,18 +333,21 @@ def main(args: argparse.Namespace):
         device,
         args.wandb_on
     )
-    logger.info("PCA training and decorrelation complete. Now testing...")
-    pca_test_entire_file(
-        test_file,
-        args.cols_to_hide,
-        pca_model_adversary,
-        retained_components,
-        args.episode_length,
-        None,
-        logger,
-        args.batch_size,
-        wandb_on=args.wandb_on
-    )
+    plot_heatmap_and_correlation(private_guess, test_prv, M_PU, all_pc_corr_scores)
+
+    # retained_components = retained_components.to(device).to(torch.float32)
+    # logger.info("PCA training and decorrelation complete. Now testing...")
+    # pca_test_entire_file(
+    #     test_file,
+    #     args.cols_to_hide,
+    #     pca_model_adversary,
+    #     retained_components,
+    #     args.episode_length,
+    #     None,
+    #     logger,
+    #     args.batch_size,
+    #     wandb_on=args.wandb_on
+    # )
     logger.info("Done with the PCA test")
 
     

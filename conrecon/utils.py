@@ -1,7 +1,11 @@
 import logging
 import os
 from datetime import datetime
- 
+
+import numpy as np
+import torch
+
+
 class ColoredFormatter(logging.Formatter):
     def __init__(self, fmt, datefmt=None):
         super().__init__(fmt, datefmt)
@@ -73,3 +77,20 @@ def deprecated(reason, date):
         return wrapper
 
     return decorator
+
+def inspect_array(prefix: str, arr: np.ndarray, verbose: bool = False):
+    print(f"({prefix}): Shape:", arr.shape)
+    print(f"({prefix}): Data type:", arr.dtype)
+    print(f"({prefix}): Size:", arr.size)
+    print(f"({prefix}): Number of dimensions:", arr.ndim)
+    if verbose:
+        print(f"({prefix}): Array:\n", arr)
+
+def inspect_tensor(prefix: str, tensor: torch.Tensor, verbose: bool = False):
+    print("({prefix}): Shape:", tensor.shape)
+    print("{prefix}): Data type:", tensor.dtype)
+    print("{prefix}): Size:", tensor.size())
+    print("{prefix}): Number of dimensions:", tensor.ndim)
+    print("{prefix}): Tensor:\n", tensor) 
+    if verbose:
+        print(f"({prefix}): Array:\n", tensor)
