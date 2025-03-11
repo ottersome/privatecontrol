@@ -1,8 +1,10 @@
 import argparse
+import logging
 from math import ceil
 from typing import List, OrderedDict, Sequence
 
 import debugpy
+from matplotlib.axes import Axes
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -379,6 +381,49 @@ def plot_heatmap_and_correlation(private_guess, test_prv, M_PU, all_pc_corr_scor
     plt.savefig("./figures/pca_heatmap.png")
     plt.close()
 
+def method_1_latent_spc_deco(
+    num_pca_components: int,
+    axs: Axes,
+    pca_components: np.ndarray,
+    pub_pc_projected: np.ndarray,
+    test_file: np.ndarray,
+    all_train_seqs: np.ndarray,
+    prv_features_idxs: Sequence[int],
+    args: argparse.Namespace,
+    logger: logging.Logger,
+):
+    # Method 1. Latent Space Decorrelatio
+    pca_reconstructor, pca_model_adversary, retained_components, all_pc_corr_scores = baseline_pca_decorr_adversary_by_pc(
+        pca_components,
+        pub_pc_projected,
+        all_train_seqs,
+        prv_features_idxs,
+        args.batch_size,
+        num_pca_components,
+        args.epochs,
+        args.lr,
+        args.device,
+        args.wandb_on,
+    )
+    print(num_pca_components)
+    print(retained_components.shape)
+    # Really quick use the salient heatmap to recover private features
+    # private_guess = test_pub.squeeze().dot(M_PU)
+
+    pca_test_entire_file(
+        axs,
+        test_file,
+        args.cols_to_hide,
+        pca_reconstructor,
+        pca_model_adversary,
+        retained_components,
+        args.episode_length,
+        None,
+        logger,
+        args.batch_size,
+        wandb_on=args.wandb_on
+    )
+
 def main(args: argparse.Namespace):
 
     if args.debug:
@@ -451,20 +496,19 @@ def main(args: argparse.Namespace):
     ########################################
     # TOREM: Move this lower down for when we are done with it. 
     logger.info("Starting the PCA decorrelation and training")
-    pca_model_adversary, retained_components, all_pc_corr_scores = baseline_pca_decorr_adversary(
-        pca_components,
-        pca_projected_ds,
-        all_train_seqs,
-        train_prv,
-        train_pub,
-        args.batch_size,
-        args.correlation_threshold,
-        args.epochs,
-        args.lr,
-        args.device,
-        args.wandb_on,
-    )
-    # plot_heatmap_and_correlation(private_guess, test_prv, M_PU, all_pc_corr_scores)
+    for cn in range(num_pca_components): 
+        # Method 1. Latent Space Decorrelatio
+        method_1_latent_spc_deco(
+            cn,
+            axs,
+            pca_components,
+            pca_projected_ds,
+            test_file,
+            all_train_seqs,
+            prv_features_idxs,
+            args,
+            logger,
+        )
 
     # retained_components = retained_components.to(device).to(torch.float32)
     # logger.info("PCA training and decorrelation complete. Now testing...")
