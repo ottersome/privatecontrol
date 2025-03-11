@@ -221,29 +221,6 @@ def plot_all(features: np.ndarray, idxs: List[int], fig_name: str):
     plt.savefig(f"figures/{fig_name}.png")
     plt.close()
 
-
-def plot_comp(
-    features_og: np.ndarray, features_san: np.ndarray, idxs: List[int], fig_name: str
-):
-    plt.figure(figsize=(32, 16))
-    plt.tight_layout()
-    san_counter = 0
-    for i in range(features_og.shape[-1]):
-        plt.subplot(4, 4, i + 1)
-        plt.plot(
-            features_og[:, i],
-        )
-        if i in idxs:
-            plt.plot(features_san[:, san_counter], label="Sanitized", alpha=0.7)
-            san_counter += 1
-        plt.legend()
-        plt.title(f"Feature {i}")
-        plt.xlabel("Time")
-        plt.ylabel("Value")
-    plt.savefig(f"figures/{fig_name}.png")
-    plt.close()
-
-
 def main(args: argparse.Namespace):
 
     original_path = "./results/val_x_[5].npy"  # Original data
@@ -355,47 +332,6 @@ def compute_all_correlations(
         "figures/correlation_distributions_sanitized.png",
         "Distribution of Pearson and Spearman Correlations: Original vs Sensitive: Original vs Sanitized",
     )
-
-
-def plot_signal_reconstructions(original, sanitized, save_name: str, ids=None):
-    """Plot signal reconstructions using Seaborn with a clean look."""
-    print(f"original data size {original.shape}")
-    print(f"sanitized data size {sanitized.shape}")
-    num_signals = original.shape[1] if ids is None else len(ids)
-    cols = int(np.ceil(np.sqrt(num_signals)))
-    rows = int(np.ceil(num_signals / cols))
-
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4))
-
-    # Convert axes to array and flatten
-    if rows == 1 and cols == 1:
-        axes = np.array([axes])
-    else:
-        axes = axes.flatten()
-
-    for i, ax in enumerate(axes[:num_signals]):
-        idx = i if ids is None else ids[i]
-        sns.lineplot(
-            x=np.arange(original.shape[0]),
-            y=original[:, idx],
-            ax=ax,
-            label="Truth",
-            color="orange",
-        )
-        sns.lineplot(
-            x=np.arange(sanitized.shape[0]),
-            y=sanitized[:, idx],
-            ax=ax,
-            label="Reconstruction",
-            color="blue",
-        )
-        ax.set_title(f"Reconstruction Vs Truth of $f_{{{idx}}}$")
-        ax.legend()
-
-    plt.tight_layout()
-    plt.savefig(save_name, dpi=300)
-    plt.close()
-
 
 if __name__ == "__main__":
 

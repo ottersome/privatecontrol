@@ -3,6 +3,7 @@ from typing import Optional, Sequence, Dict, Tuple
 from math import ceil
 import logging
 
+from matplotlib.axes import Axes
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,6 +11,7 @@ import matplotlib.pyplot as plt
 import wandb
 
 from conrecon.data.dataset_generation import batch_generation_randUni, collect_n_sequential_batches, spot_backhistory
+from conrecon.utils.graphing import plot_comp, plot_signal_reconstructions
 
 def triv_test_entire_file(
     validation_file: np.ndarray,
@@ -88,8 +90,10 @@ def triv_test_entire_file(
     return {k: np.mean(v).item() for k, v in metrics.items()}
 
 def pca_test_entire_file(
+    axs: Axes,
     test_file: np.ndarray,
     prv_features_idxs: Sequence[int],
+    model_recon: nn.Module,
     model_adversary: nn.Module,
     principal_components: torch.Tensor,
     sequence_length: int,
@@ -99,7 +103,7 @@ def pca_test_entire_file(
     wandb_on: bool = False,
 ) -> Dict[str, float]:
     """
-    Will run a validation iteration for a model
+    Will run a the test iteration on model with adverasry
     Args:
         - validation_file: Validation data (file_length, num_features)
         - model: Model to run the validation on
@@ -109,75 +113,58 @@ def pca_test_entire_file(
         "recon_loss": [],
         "adv_loss": [],
     }
-    amnt_columns = test_file.shape[-1]
-
+    model_recon.eval()
     model_adversary.eval()
+
     device = next(model_adversary.parameters()).device
-    val_x = torch.from_numpy(test_file).to(torch.float32).to(device)
-    pub_features_idxs = list(set(range(amnt_columns)) - set(prv_features_idxs))
+    test_tensor = torch.from_numpy(test_file).to(torch.float32).to(device)
 
-    num_batches = ceil((len(val_x) - sequence_length) / batch_size)
+    num_batches = ceil((len(test_tensor) - sequence_length) / batch_size)
 
-    batch_guesses = []
-    batch_reconstructions = []
-    logger.info("About to start the test")
+    batch_adv_infs = []
+    batch_recon_infs = []
+    ########################################
+    # Adversarial Reconstructions
+    ########################################
     for batch_no in range(num_batches):
         ########################################
         # Sanitize the data
         ########################################
         start_idx = batch_no * batch_size + sequence_length
-        end_idx = min((batch_no + 1) * batch_size + sequence_length, val_x.shape[0]) 
-        backhistory = collect_n_sequential_batches(val_x, start_idx, end_idx, sequence_length, padding_value)[:,:,pub_features_idxs]
+        end_idx = min((batch_no + 1) * batch_size + sequence_length, test_tensor.shape[0]) 
+        backhistory = collect_n_sequential_batches(test_tensor, start_idx, end_idx, sequence_length, padding_value)
         projected_backhistory = torch.matmul(backhistory, principal_components.T)
 
         # TODO: Incorporate Adversary Guess
         with torch.no_grad():
+            recon_inference = model_recon(projected_backhistory)
             adversary_guess = model_adversary(projected_backhistory)
-        batch_guesses.append(adversary_guess)
 
-    seq_guesses = torch.cat(batch_guesses, dim=0)
+        batch_recon_infs.append(recon_inference)
+        batch_adv_infs.append(adversary_guess)
+
+    adv_guesses = torch.cat(batch_adv_infs, dim=0).cpu()
+    seq_reconstructions = torch.cat(batch_recon_infs, dim=0)
     ########################################
     # Chart for Reconstruction
     ########################################
-    logger.info("PCA Reconstruction Graph")
-    idxs_of_choice = list(set(range(seq_guesses.shape[-1])) - set(prv_features_idxs))
-    random_8_idxs = np.random.choice(idxs_of_choice, 8, replace=False)
-    recons_to_show = seq_guesses[:, random_8_idxs]
-    truth_to_compare = test_file[:, random_8_idxs]
-    fig,axs = plt.subplots(4,2,figsize=(32,20))
-    for i in range(recons_to_show.shape[1]):
-        mod = i % 4
-        idx = i // 4
-        axs[mod,idx].plot(recons_to_show[:,i].squeeze().detach().cpu().numpy(), label="Reconstruction")
-        axs[mod,idx].set_title("Reconstruction Vs Truth")
-        axs[mod,idx].legend()
-        axs[mod,idx].plot(truth_to_compare[:,i].squeeze(), label="Truth")
-        axs[mod,idx].legend()
-        if wandb_on:
-            wandb.log({f"Reconstruction (Col {i})": recons_to_show[:,i].squeeze().detach().cpu().numpy()})
-            wandb.log({f"Truth (Col {i})": truth_to_compare[:,i].squeeze().detach().cpu().numpy()})
-    plt.savefig(f"figures/pca_reconstruction.png")
-    logger.info(f"Saved the reconstruction figure to {f'figures/pca_reconstruction.png'}")
-    plt.close()
+    num_principal_components = principal_components.shape[0]
+    logger.info(f"Plotting reconstruction with {num_principal_components} components")
+    pub_features_idxs = list(set(range(test_file.shape[-1])) - set(prv_features_idxs))
+    print(pub_features_idxs)
+    plot_comp(test_file, seq_reconstructions.cpu(), pub_features_idxs, f"figures/pca/pca_reconstruction_{num_principal_components}_components")
 
     ########################################
     # Chart for Adversary
     ########################################
-    adv_to_show = seq_guesses[:, :]
+    adv_to_show = adv_guesses[:, :]
     adv_truth = test_file[sequence_length:, prv_features_idxs]
-    
-    logger.info("Creating PCA Adversary Graph")
-    fig = plt.figure(figsize=(16,10))
-    plt.plot(adv_to_show.squeeze().detach().cpu().numpy(), label="Adversary")
-    plt.title("Adversary")
-    plt.legend()
-    plt.plot(adv_truth.squeeze(), label="Truth")
-    plt.title("Truth")
-    plt.legend()
 
-    plt.savefig(f"figures/pca_adversary.png")
-    plt.close()
-    logger.info(f"Saved the adversary figure to {f'figures/pca_adversary.png'}")
+    plot_signal_reconstructions(
+        test_file[sequence_length:, prv_features_idxs],
+        adv_guesses,
+        f"figures/pca/pca_adversary_{num_principal_components}_components",
+    )
 
     # Pass reconstruction and adversary to wandb
     if wandb_on:
