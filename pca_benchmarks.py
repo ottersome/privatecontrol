@@ -527,7 +527,7 @@ def main(args: argparse.Namespace):
 
     
 if __name__ == "__main__":
-    logger = create_logger("main_vae")
+    logger = create_logger("pca_benchmarks")
     args = argsies()
     main(args)
 
