@@ -1,6 +1,6 @@
 import argparse
 from math import ceil
-from typing import List, OrderedDict
+from typing import List, OrderedDict, Sequence
 
 import debugpy
 import matplotlib.pyplot as plt
@@ -51,7 +51,126 @@ def argsies() -> argparse.Namespace:
 
     return ap.parse_args()
 
-def baseline_pca_decorr_adversary(
+def baseline_pca_decorr_adversary_by_pc(
+    principal_components: np.ndarray,
+    pub_pc_projected: np.ndarray,
+    train_all: np.ndarray,
+    prv_features_idxs: Sequence[int],
+    batch_size: int,
+    num_pcs_to_remove: int,
+    epochs: int,
+    lr: float,
+    device: torch.device,
+    wandb_on: bool,
+) -> tuple[nn.Module, nn.Module, torch.Tensor, np.ndarray]:
+
+    # Prepping some data
+    pub_features_idxs = list(set(range(train_all.shape[-1])) - set(prv_features_idxs))
+    train_all_flat = train_all.reshape(-1, train_all.shape[-1])
+    train_all_centered = train_all_flat - np.mean(train_all_flat, axis=0)
+    train_pub = train_all[:, :, pub_features_idxs]
+    train_prv = train_all[:, :, prv_features_idxs]
+    train_prv_flat = train_prv.reshape(-1, train_prv.shape[-1])
+    # train_pub_flat = train_pub.reshape(-1, train_pub.shape[-1])
+    # train_pub_centered = train_pub_flat - np.mean(train_pub_flat, axis=0)
+    sequence_length = train_all.shape[1]
+    num_features = train_all.shape[-1]
+    num_pub_features = len(pub_features_idxs)
+    num_priv_features = len(prv_features_idxs)
+    train_pub_tensor = torch.tensor(train_pub).to(device).to(torch.float32)
+    train_prv_tensor = torch.tensor(train_prv).to(device).to(torch.float32)
+    
+    ########################################
+    # Check on correlations
+    ########################################
+    all_pc_corr_scores = []
+    for i in range(principal_components.shape[0]):
+        pc_i_timeseries = pub_pc_projected[:,i]
+        corr_i = np.corrcoef(pc_i_timeseries, train_prv_flat.squeeze())[0,1]
+        all_pc_corr_scores.append(corr_i)
+        # ensure corr_i is not nan
+        assert not np.isnan(corr_i)
+
+    # For debugging mostly
+    all_pc_corr_scores = np.array(all_pc_corr_scores)
+
+    # Argsort to get the most correlated components
+    most_correlate_comps_idxs = np.argsort(np.abs(all_pc_corr_scores))[::-1][:num_pcs_to_remove]
+    remaining_idxs = np.setdiff1d(np.arange(num_features), most_correlate_comps_idxs)
+    retained_components = principal_components[remaining_idxs]
+
+    # Project the data onto the retained components
+    sanitized_projections_for_training = train_all_centered.dot(retained_components.T)
+    sanitized_feature_nums = retained_components.shape[0]
+    sanitized_projections_for_training = sanitized_projections_for_training.reshape(-1, sequence_length, sanitized_feature_nums)
+    sanitized_projections_for_training = torch.from_numpy(sanitized_projections_for_training).to(torch.float32).to(device)
+    num_batches = ceil(sanitized_projections_for_training.shape[0] / batch_size)
+
+    # We need to restructure the data.
+    logger.info("Restructuring the data")
+
+    criterion = nn.MSELoss()
+    reconstructor = PCATemporalAdversary(
+        num_principal_components=retained_components.shape[0],
+        num_features_to_recon=num_pub_features,
+        dnn_hidden_size=31,
+        rnn_hidden_size=30,
+    ).to(device)
+    adversary = PCATemporalAdversary(
+        num_principal_components=retained_components.shape[0],
+        num_features_to_recon=num_priv_features,
+        dnn_hidden_size=31,
+        rnn_hidden_size=30,
+    ).to(device)
+    opt_reconstructor = torch.optim.Adam(reconstructor.parameters(), lr=lr) # type: ignore
+    opt_adversary = torch.optim.Adam(adversary.parameters(), lr=lr) # type: ignore
+
+    ############################################################
+    # Training Based on the Sanitized PCA Components
+    ############################################################
+    reconstruction_losses = []
+    adv_losses = []
+    for e in tqdm(range(epochs), desc="Epochs"):
+        for batch_no in tqdm(range(num_batches), desc="Batches"):
+            # Now Get the new VAE generations
+            batch_inp = sanitized_projections_for_training[batch_no * batch_size : (batch_no + 1) * batch_size]
+            prv_feats = train_prv_tensor[batch_no * batch_size : (batch_no + 1) * batch_size, :, ]
+            pub_feats = train_pub_tensor[batch_no * batch_size : (batch_no + 1) * batch_size, :, ]
+
+            reconstructor_guess = reconstructor(batch_inp).squeeze()
+            adversary_guess = adversary(batch_inp).squeeze()
+
+            # Calculate the loss
+            recon_loss = criterion(reconstructor_guess, pub_feats[:,-1].squeeze())
+            adv_loss = criterion(adversary_guess, prv_feats[:,-1].squeeze())
+            adversary.zero_grad()
+            reconstructor.zero_grad()
+            recon_loss.backward()
+            adv_loss.backward()
+            opt_reconstructor.step()
+            opt_adversary.step()
+
+            reconstruction_losses.append(recon_loss.item())
+            adv_losses.append(adv_loss.item())
+
+            if wandb_on:
+                wandb.log({
+                    "pca_recon_train_loss": recon_loss.item(),
+                    "pca_adv_train_loss": adv_loss.item(),
+                })
+
+    # Plot reconstruction losses
+    plt.figure(figsize=(16,10))
+    plt.plot(reconstruction_losses)
+    plt.title("Reconstruction Loss")
+    plt.savefig(f"./figures/pca_recon_losses.png")
+    plt.close()
+
+    retained_components = torch.from_numpy(retained_components).to(device).to(torch.float32)
+
+    return reconstructor, adversary, retained_components, all_pc_corr_scores
+
+def baseline_pca_decorr_adversary_w_threshold(
     principal_components: np.ndarray,
     pub_pc_projected: np.ndarray,
     train_prv: np.ndarray,
