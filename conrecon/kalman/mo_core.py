@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 import torch
 from torch import Tensor, nn
 
-from conrecon.utils import create_logger
+from conrecon.utils.common import create_logger
 
 # Something has to take care of the states
 # We might require this to be a module in on by itself

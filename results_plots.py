@@ -10,6 +10,7 @@ from sklearn.preprocessing import StandardScaler
 import debugpy
 import argparse
 
+from conrecon.utils.graphing import plot_comp, plot_signal_reconstructions
 
 def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()

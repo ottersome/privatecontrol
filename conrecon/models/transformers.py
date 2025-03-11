@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from conrecon.utils import create_logger
+from conrecon.utils.common import create_logger
 from torch.nn import TransformerEncoder
 from torch.nn import TransformerEncoderLayer
 

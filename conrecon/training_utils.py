@@ -19,7 +19,7 @@ from conrecon.dplearning.adversaries import (
 )
 from conrecon.dplearning.vae import SequenceToScalarVAE, SequenceToScalarVAE
 from conrecon.plotting import TrainLayout
-from conrecon.utils import create_logger
+from conrecon.utils.common import create_logger
 from conrecon.validation_functions import calculate_validation_metrics
 from conrecon.performance_test_functions import (
     vae_test_file,

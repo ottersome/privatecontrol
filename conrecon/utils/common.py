@@ -87,10 +87,10 @@ def inspect_array(prefix: str, arr: np.ndarray, verbose: bool = False):
         print(f"({prefix}): Array:\n", arr)
 
 def inspect_tensor(prefix: str, tensor: torch.Tensor, verbose: bool = False):
-    print("({prefix}): Shape:", tensor.shape)
-    print("{prefix}): Data type:", tensor.dtype)
-    print("{prefix}): Size:", tensor.size())
-    print("{prefix}): Number of dimensions:", tensor.ndim)
-    print("{prefix}): Tensor:\n", tensor) 
+    print(f"({prefix}): Shape:", tensor.shape)
+    print(f"({prefix}): Data type:", tensor.dtype)
+    print(f"({prefix}): Size:", tensor.size())
+    print(f"({prefix}): Number of dimensions:", tensor.ndim)
+    print(f"({prefix}): Tensor:\n", tensor) 
     if verbose:
         print(f"({prefix}): Array:\n", tensor)

@@ -11,7 +11,7 @@ import seaborn as sns
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.adversaries import Adversary
 from conrecon.dplearning.vae import SequenceToScalarVAE
-from conrecon.utils import create_logger, set_seeds
+from conrecon.utils.common import create_logger, set_seeds
 from conrecon.performance_test_functions import get_tradeoff_metrics
 from conrecon.training_utils import train_vae_and_adversary_bi_level
 

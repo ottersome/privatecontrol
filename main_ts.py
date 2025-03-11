@@ -18,7 +18,7 @@ from sklearn.decomposition import PCA
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.adversaries import Adversary, TrivialTemporalAdversary, PCATemporalAdversary
 from conrecon.dplearning.vae import SequenceToScalarVAE
-from conrecon.utils import create_logger, set_seeds
+from conrecon.utils.common import create_logger, set_seeds
 from conrecon.performance_test_functions import vae_test_file, triv_test_entire_file, pca_test_entire_file
 from conrecon.training_utils import train_vae_and_adversary_bi_level
 
