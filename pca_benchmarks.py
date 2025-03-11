@@ -434,6 +434,18 @@ def main(args: argparse.Namespace):
         pca_projected_ds,
         train_prv,
     )
+
+    ########################################
+    # Figure Initialization
+    #   We will initalize most figure stuff
+    #   here so we can pass them as parameters
+    #   to functions and keeep them separate
+    ########################################
+    fig, axs = plt.subplots(1,1,figsize=(16,8))
+    axs.set_title("Original Data")
+    axs.set_xlabel("Privacy")
+    axs.set_ylabel("Utility")
+
     ########################################
     # Training the PCA based baseline
     ########################################
