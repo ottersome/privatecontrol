@@ -70,6 +70,10 @@ def baseline_pca_decorr_adversary(
     train_pub_centered = train_pub_flat - np.mean(train_pub_flat, axis=0)
     sequence_length = train_pub.shape[1]
     num_features = train_pub.shape[-1]
+    num_priv_components = train_prv.shape[-1]
+    num_pub_components = train_pub.shape[-1]
+    train_pub_tensor = torch.tensor(train_pub).to(device).to(torch.float32)
+    train_prv_tensor = torch.tensor(train_prv).to(device).to(torch.float32)
 
     ########################################
     # Check on correlations
@@ -78,12 +82,11 @@ def baseline_pca_decorr_adversary(
     all_pc_corr_scores = []
     for i in range(principal_components.shape[0]):
         pc_i_timeseries = pub_pc_projected[:,i]
-        corr_i = np.corrcoef(pc_i_timeseries, train_prv_flat)[0,1]
+        corr_i = np.corrcoef(pc_i_timeseries, train_prv_flat.squeeze())[0,1]
         all_pc_corr_scores.append(corr_i)
         # ensure corr_i is not nan
         assert not np.isnan(corr_i)
         if abs(corr_i) <= correlation_threshold:
-
             retained_components.append(principal_components[i])
 
     # For debugging mostly
@@ -101,36 +104,53 @@ def baseline_pca_decorr_adversary(
     logger.info("Restructuring the data")
 
     criterion = nn.MSELoss()
-    adversary = PCATemporalAdversary(
+    reconstructor = PCATemporalAdversary(
         num_principal_components=retained_components.shape[0],
-        num_features_to_recon=num_features,
+        num_features_to_recon=num_pub_components,
         dnn_hidden_size=31,
         rnn_hidden_size=30,
     ).to(device)
+    adversary = PCATemporalAdversary(
+        num_principal_components=retained_components.shape[0],
+        num_features_to_recon=num_priv_components,
+        dnn_hidden_size=31,
+        rnn_hidden_size=30,
+    ).to(device)
+    opt_reconstructor = torch.optim.Adam(reconstructor.parameters(), lr=lr) # type: ignore
     opt_adversary = torch.optim.Adam(adversary.parameters(), lr=lr) # type: ignore
 
     ############################################################
     # Training Based on the Sanitized PCA Components
     ############################################################
     reconstruction_losses = []
+    adv_losses = []
     for e in tqdm(range(epochs), desc="Epochs"):
         for batch_no in tqdm(range(num_batches), desc="Batches"):
             # Now Get the new VAE generations
-            batch_pub = sanitized_projections_for_training[batch_no * batch_size : (batch_no + 1) * batch_size]
-            all_feats = all_train_seqs[batch_no * batch_size : (batch_no + 1) * batch_size]
+            batch_inp = sanitized_projections_for_training[batch_no * batch_size : (batch_no + 1) * batch_size]
+            prv_feats = train_prv_tensor[batch_no * batch_size : (batch_no + 1) * batch_size, :, ]
+            pub_feats = train_pub_tensor[batch_no * batch_size : (batch_no + 1) * batch_size, :, ]
 
-            adversary_guess = adversary(batch_pub).squeeze()
+            reconstructor_guess = reconstructor(batch_inp).squeeze()
+            adversary_guess = adversary(batch_inp).squeeze()
 
             # Calculate the loss
-            loss = criterion(adversary_guess, all_feats[:,-1])
+            recon_loss = criterion(reconstructor_guess, pub_feats[:,-1])
+            adv_loss = criterion(adversary_guess, prv_feats[:,-1])
             adversary.zero_grad()
-            loss.backward()
+            reconstructor.zero_grad()
+            recon_loss.backward()
+            adv_loss.backward()
+            opt_reconstructor.step()
             opt_adversary.step()
-            reconstruction_losses.append(loss.item())
+
+            reconstruction_losses.append(recon_loss.item())
+            adv_losses.append(adv_loss.item())
 
             if wandb_on:
                 wandb.log({
-                    "adv_train_loss": loss.item(),
+                    "pca_recon_train_loss": recon_loss.item(),
+                    "pca_adv_train_loss": adv_loss.item(),
                 })
 
     # Plot reconstruction losses
