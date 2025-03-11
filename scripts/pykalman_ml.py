@@ -24,7 +24,7 @@ from tqdm import tqdm
 from conrecon.dplearning.vae import FlexibleVAE
 from conrecon.models.transformers import TorchsTransformer
 from conrecon.plotting import TrainLayout
-from conrecon.utils import create_logger
+from conrecon.utils.common import create_logger
 from conrecon.ss_generation import SSParam
 from conrecon.data.dataset_generation import TrainingMetaData, generate_dataset
 

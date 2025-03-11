@@ -14,7 +14,7 @@ import wandb
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.adversaries import PCATemporalAdversary
 from conrecon.performance_test_functions import pca_test_entire_file
-from conrecon.utils import create_logger, set_seeds
+from conrecon.utils.common import create_logger, set_seeds
 
 
 def argsies() -> argparse.Namespace:

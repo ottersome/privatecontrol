@@ -7,7 +7,7 @@ import numpy as np
 import numpy.typing as npt
 from numpy.linalg import matrix_rank
 
-from .utils import deprecated
+from .utils.common import deprecated
 
 class SSParam(NamedTuple):
     A: Optional[npt.NDArray[np.float64]] # Transition Matrix

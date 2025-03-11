@@ -18,7 +18,7 @@ from conrecon.dplearning.vae import FlexibleVAE, AdversarialVAE
 from conrecon.kalman.mo_core import Filter
 from conrecon.plotting import TrainLayout, plot_functions, plot_functions_2by1
 from conrecon.ss_generation import hand_design_matrices
-from conrecon.utils import create_logger
+from conrecon.utils.common import create_logger
 from conrecon.models.models import SimpleRegressionModel
 import matplotlib.pyplot as plt
 

@@ -18,7 +18,7 @@ import torch.nn as nn
 from conrecon.automated_generation import generate_state_space_system
 from conrecon.models import SimpleModel
 from conrecon.plotting import TrainLayout
-from conrecon.utils import create_logger
+from conrecon.utils.common import create_logger
 from rich import inspect
 from rich.console import Console
 from rich.live import Live

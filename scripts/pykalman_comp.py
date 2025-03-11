@@ -14,7 +14,7 @@ from rich.console import Console
 from sktime.libs.pykalman import KalmanFilter
 
 from conrecon.kalman.mo_core import Filter
-from conrecon.utils import create_logger
+from conrecon.utils.common import create_logger
 from conrecon.plotting import plot_functions
 
 traceback.install()
