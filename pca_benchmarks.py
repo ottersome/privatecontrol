@@ -313,13 +313,15 @@ def pca_preprocessing(
 def pca_decomposition_w_heatmap(
     pca_components: np.ndarray,
     pca_projected_ds: np.ndarray,
+    train_pub: np.ndarray,
     train_prv: np.ndarray,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     This will create a matrix M_{up} that will help us convert public components into private components.
     returns: M_UI
     """
     train_prv_flat = train_prv.reshape(-1, train_prv.shape[-1])
+    train_pub_flat = train_pub.reshape(-1, train_pub.shape[-1])
     C = pca_projected_ds
 
     # The projection matrix from public to latent space
@@ -329,7 +331,8 @@ def pca_decomposition_w_heatmap(
     # We assume X_U \approx C @ M_CU
     # M_CU has shape (K, N-M)
     # Using np.linalg.lstsq to solve: M_CU = argmin ||C @ M - X_U||^2
-    M_li, residuals, rank, s = np.linalg.lstsq(C, train_prv_flat, rcond=None)
+    M_li, _, _, s = np.linalg.lstsq(C, train_prv_flat, rcond=None)
+    M_lu, _, _, s = np.linalg.lstsq(C, train_pub_flat, rcond=None)
 
     # ----- (Optional) Directly check (C^T C) invertibility -----
     # If C^T C is singular or near-singular, direct inversion is problematic
@@ -343,8 +346,9 @@ def pca_decomposition_w_heatmap(
 
     # ----- Step 3: Compute the final M_PU = M_CP @ M_CU -----
     M_UI = M_ul @ M_li  # shape: (M, N-M) i.e. (num_public_components, num_private_components)
+    M_UU = M_ul @ M_lu  # shape: (M, N-M) i.e. (num_public_components, num_private_components) 
 
-    return  M_UI
+    return  M_UI, M_UU
 
 
 def plot_heatmap_and_correlation(private_guess, test_prv, M_PU, all_pc_corr_scores):
@@ -511,9 +515,10 @@ def main(args: argparse.Namespace):
     ########################################
     # Get M_UI for the MUI method
     ########################################
-    M_UI = pca_decomposition_w_heatmap(
+    M_UI, M_UU = pca_decomposition_w_heatmap(
         pca_components,
         pca_projected_ds,
+        train_pub,
         train_prv,
     )
 
