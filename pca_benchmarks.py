@@ -424,6 +424,45 @@ def method_1_latent_spc_deco(
         wandb_on=args.wandb_on
     )
 
+def method_2_MUI_decorrelation(
+    num_features_to_keep: int,
+    test_file: np.ndarray,
+    test_prv: np.ndarray,
+    M_UI: np.ndarray,
+):
+    """
+    Will grab the already pretrained/conditioned M_ui and slowly test the removal of some columns until we get zero utility. Out of it
+    """
+    assert (
+        M_UI.shape[1] == 1
+    ), f"Currently only working with a single private component. Instead we got {M_UI.shape}"
+    max_corr_idxs = np.argsort(np.abs(M_UI.squeeze()))[:num_features_to_keep]
+
+    M_UI_pruned = M_UI[max_corr_idxs, :]
+    test_file_flattend = test_file.reshape(-1, test_file.shape[-1])
+    test_file_pruned = test_file_flattend[:,max_corr_idxs]
+    test_prv_flattend = test_prv.reshape(-1, test_prv.shape[-1])
+
+    recovered_private_guess = test_file_pruned.dot(M_UI_pruned)
+
+    # DEBUG: FOr now we plot it like this
+    plt.figure(figsize=(16,10))
+    plt.plot(recovered_private_guess.squeeze(), label="Reconstruction")
+    plt.plot(test_prv_flattend, label="Truth")
+    plt.title("PCA Reconstruction vs Truth")
+    plt.legend()
+    plt.savefig(f"./figures/pca/heatmap_mui_reconstruction_{num_features_to_keep}.png")
+    plt.close()
+
+    # TODO: Make this work
+    # plot_heatmap_and_correlation(
+    #     M_UI_pruned,
+    #     all_pc_corr_scores,
+    #     pca_components,
+    #     private_guess,
+    #     test_prv,
+    # )
+
 def main(args: argparse.Namespace):
 
     if args.debug:
@@ -466,15 +505,13 @@ def main(args: argparse.Namespace):
     ########################################
     logger.info("Starting the PCA preprocessing")
     pca_components, pca_projected_ds = pca_preprocessing(
-        train_pub,
-        train_prv,
+        all_train_seqs,
     )
 
     ########################################
-    # PCA Decomposition with heatmap
+    # Get M_UI for the MUI method
     ########################################
-    logger.info("Creating the decomposition with heatmap")
-    private_guess, test_prv, M_PU = pca_decomposition_w_heatmap(
+    M_UI = pca_decomposition_w_heatmap(
         pca_components,
         pca_projected_ds,
         train_prv,
@@ -496,10 +533,10 @@ def main(args: argparse.Namespace):
     ########################################
     # TOREM: Move this lower down for when we are done with it. 
     logger.info("Starting the PCA decorrelation and training")
-    for cn in range(num_pca_components): 
+    for num_comp in range(num_pca_components): 
         # Method 1. Latent Space Decorrelatio
         method_1_latent_spc_deco(
-            cn,
+            num_comp,
             axs,
             pca_components,
             pca_projected_ds,
@@ -508,6 +545,12 @@ def main(args: argparse.Namespace):
             prv_features_idxs,
             args,
             logger,
+        )
+        method_2_MUI_decorrelation(
+            num_comp,
+            test_file,
+            test_prv,
+            M_UI,
         )
 
     # retained_components = retained_components.to(device).to(torch.float32)
