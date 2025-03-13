@@ -1,10 +1,57 @@
 import os
+from math import ceil, sqrt
 from typing import Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import seaborn as sns
+
+
+def plot_given(
+    func_a: np.ndarray,
+    func_b: np.ndarray,
+    func_a_label: str,
+    func_b_label: str,
+    x_label: str,
+    y_label: str,
+    sub_plot_tit: str,
+    title: str,
+    fig_savedest: str
+):
+    assert (
+        len(func_a.shape) == 2 and len(func_b.shape) == 2
+    ), "We expect both functions to be 2d"
+    assert (
+        func_a.shape[1] == func_b.shape[1]
+    ), f"Expecting both functions to have same amount of features, instead we get {func_a.shape} and {func_b.shape}"
+    assert (
+        func_a.shape[0] == func_b.shape[0]
+    ), "Expecting both functions to have the same amount of time steps"
+
+    num_features = func_a.shape[1]
+    num_cols = ceil(sqrt(func_a.shape[1]))
+    num_rows = ceil(num_features / num_cols)
+
+    fig, axes  = plt.subplots(num_rows, num_cols, figsize=(4*num_rows,4*num_cols))
+    axes = axes.flatten()
+
+    for nf in range(num_features):
+        axes[nf].plot(func_a[:, nf], c = "b", label = func_a_label)
+        axes[nf].plot(func_b[:, nf], c = "orange", label = func_b_label)
+        axes[nf].set_title(sub_plot_tit.format(nf))
+        axes[nf].set_xlabel(x_label)
+        axes[nf].set_ylabel(y_label)
+
+    remaining = num_cols*num_rows - num_features
+
+    # Remove the remaining axes
+    for ax_idx in range(num_features, len(axes)):
+        fig.delaxes(axes[ax_idx])
+
+    plt.title(title)
+    plt.savefig(fig_savedest)
+    plt.close()
 
 
 def plot_comp(
@@ -14,8 +61,9 @@ def plot_comp(
     save_name: str,
 ):
     """
-    Will plot all features in a single plot. 
-    Warning: Sort of hard-cody in the sense that a lot of assumptions are made
+    Will plot all features in a single plot. Including private and public. 
+    Hardcoded-ly expects 16 features and is very inflexible about this.
+    Warning: Sort of hard-coded in the sense that a lot of assumptions are made
     args:
         - features_og: Original features
         - features_san: Sanitized features

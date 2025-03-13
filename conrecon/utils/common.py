@@ -98,3 +98,23 @@ def inspect_tensor(prefix: str, tensor: torch.Tensor, verbose: bool = False):
 def array_to_csv(arr: np.ndarray, save_path: str):
     np.savetxt(save_path, arr, delimiter=",")
 
+def calculate_correlation(vec: np.ndarray, mat:np.ndarray) -> np.ndarray:
+    all_pc_corr_scores = []
+    assert len(vec.shape) == 2 and vec.shape[-1] == 1, f"The vector should be a 2d array with shape (2, num_features) but is {vec.shape}"
+    assert mat.shape[0] == vec.shape[0], f"The matrix should have the same number of features as the vector but is {mat.shape} and {vec.shape}"
+
+    for i in range(mat.shape[-1]):
+        print(f"Calculating correlation for column {i}")
+        col_i_timeseries = mat[:,i]
+        corr_i = np.corrcoef(col_i_timeseries, vec.squeeze())[0,1]
+        all_pc_corr_scores.append(corr_i)
+        # ensure corr_i is not nan
+        # if np.isnan(corr_i):
+            # print(f"Correlation is NaN for column {i}")
+            # # Dump the data
+            # inspect_array("mat", mat)
+            # print(f"Peek into vec: {vec}")
+            # inspect_array("vec", vec)
+            # print(f"Peek into col_i_timeseries: {col_i_timeseries}")
+        assert not np.isnan(corr_i), f"Correlation is NaN for column {i}"
+    return np.abs(np.array(all_pc_corr_scores))

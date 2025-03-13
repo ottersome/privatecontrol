@@ -1,7 +1,8 @@
 import argparse
 import logging
 from math import ceil
-from typing import List, OrderedDict, Sequence
+from typing import List, Optional, OrderedDict, Sequence
+import os
 
 import debugpy
 from matplotlib.axes import Axes
@@ -15,8 +16,8 @@ from tqdm import tqdm
 import wandb
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.adversaries import PCATemporalAdversary
-from conrecon.performance_test_functions import pca_test_entire_file
-from conrecon.utils.common import create_logger, set_seeds
+from conrecon.performance_test_functions import pca_test_entire_file, test_pca_M_decorrelation
+from conrecon.utils.common import calculate_correlation, create_logger, inspect_array, set_seeds
 
 
 def argsies() -> argparse.Namespace:
@@ -28,7 +29,7 @@ def argsies() -> argparse.Namespace:
         type=str,
         help="Where to load the data from",
     )
-    ap.add_argument("--cols_to_hide", default=[5], type=List, help="What columns to hide. For now too heavy assupmtion of singleton list")
+    ap.add_argument("--cols_to_hide", default=[5-2], type=List, help="What columns to hide. For now too heavy assupmtion of singleton list")
     ap.add_argument("--correlation_threshold", default=0.1 , type=float, help="Past which point we will no longer consider more influence from public features")
     ap.add_argument("--episode_length", default=32, type=int)
     ap.add_argument(
@@ -85,6 +86,7 @@ def baseline_pca_decorr_adversary_by_pc(
     ########################################
     # Check on correlations
     ########################################
+    # TODO: Use the function in utils/common.py to calculate the correlation instead of repeating this
     all_pc_corr_scores = []
     for i in range(principal_components.shape[0]):
         pc_i_timeseries = pub_pc_projected[:,i]
@@ -97,8 +99,9 @@ def baseline_pca_decorr_adversary_by_pc(
     all_pc_corr_scores = np.array(all_pc_corr_scores)
 
     # Argsort to get the most correlated components
-    most_correlate_comps_idxs = np.argsort(np.abs(all_pc_corr_scores))[::-1][:num_pcs_to_remove]
-    remaining_idxs = np.setdiff1d(np.arange(num_features), most_correlate_comps_idxs)
+    most_correlated_comps_idxs = np.argsort(np.abs(all_pc_corr_scores))[::-1][ :num_pcs_to_remove ]
+    logger.debug( f"Method 1 most correlated component: {most_correlated_comps_idxs if num_pcs_to_remove > 0 else None}")
+    remaining_idxs = np.setdiff1d(np.arange(num_features), most_correlated_comps_idxs)
     retained_components = principal_components[remaining_idxs]
 
     # Project the data onto the retained components
@@ -315,22 +318,31 @@ def pca_decomposition_w_heatmap(
     pca_projected_ds: np.ndarray,
     train_pub: np.ndarray,
     train_prv: np.ndarray,
+    pub_features_idxs: Sequence[int],
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    This will create a matrix M_{up} that will help us convert public components into private components.
+    This will create a matrixM_{up} that will help us convert public components into private components.
     returns: M_UI
     """
+    # inspect_array("clean_test_file", train_pub)
     train_prv_flat = train_prv.reshape(-1, train_prv.shape[-1])
     train_pub_flat = train_pub.reshape(-1, train_pub.shape[-1])
     C = pca_projected_ds
 
-    # The projection matrix from public to latent space
+    # The projectionmatrix from public to latent space
+    np.savetxt(f"./csvs/pca_components.csv", pca_components, delimiter=",", header=",".join(map(str, range(pca_components.shape[-1]))))
     M_ul = pca_components.T # (Num latent components, components size / num features)
+
+    # inspect_array("pca_components", pca_components)
+    # inspect_array("M_ul",M_ul)
 
     # ----- Step 2: Solve for M_CU via linear regression -----
     # We assume X_U \approx C @ M_CU
     # M_CU has shape (K, N-M)
     # Using np.linalg.lstsq to solve: M_CU = argmin ||C @ M - X_U||^2
+    inspect_array("C", C)
+    # inspect_array("train_prv_flat", train_prv_flat)
+    inspect_array("train_pub_flat", train_pub_flat)
     M_li, _, _, s = np.linalg.lstsq(C, train_prv_flat, rcond=None)
     M_lu, _, _, s = np.linalg.lstsq(C, train_pub_flat, rcond=None)
 
@@ -347,23 +359,26 @@ def pca_decomposition_w_heatmap(
     # ----- Step 3: Compute the final M_PU = M_CP @ M_CU -----
     M_UI = M_ul @ M_li  # shape: (M, N-M) i.e. (num_public_components, num_private_components)
     M_UU = M_ul @ M_lu  # shape: (M, N-M) i.e. (num_public_components, num_private_components) 
-
+    np.savetxt(f"./csvs/M_UI.csv", M_UI, delimiter=",")
+    np.savetxt(f"./csvs/M_UU.csv", M_UU, delimiter=",")
+    # # inspect_array("M_UI", M_UI)
+    # # inspect_array("M_UU", M_UU)
+    # inspect_array("M_ul", M_ul)
+    # inspect_array("M_li", M_li)
+    # inspect_array("M_lu", M_lu)
     return  M_UI, M_UU
 
-
-def plot_heatmap_and_correlation(private_guess, test_prv, M_PU, all_pc_corr_scores):
-    # Now we plot the results
-    plt.figure(figsize=(16,10))
-    plt.plot(private_guess.squeeze(), label="Reconstruction")
-    plt.plot(test_prv.squeeze(), label="Truth")
-    plt.title("PCA Reconstruction vs Truth")
-    plt.legend()
-    plt.savefig("./figures/mcu_reconstruction.png")
-    plt.close()
+def plot_heatmap_and_correlation(
+    M_PU: np.ndarray,
+    all_pc_corr_scores: np.ndarray,
+    principal_components: np.ndarray,
+    naive_private_guess: np.ndarray,
+    test_prv_truth: np.ndarray,
+):
     ########################################
     # Plot the HeatMap
     ########################################
-    fig, axs = plt.subplots(2, 1, figsize=(16,8))
+    _, axs = plt.subplots(2, 1, figsize=(16,8))
     
     # Upper subplot: Heatmap
     im = axs[0].matshow(M_PU.T, cmap='viridis')
@@ -380,14 +395,38 @@ def plot_heatmap_and_correlation(private_guess, test_prv, M_PU, all_pc_corr_scor
     axs[1].set_xlabel("Public Features")
     axs[1].set_ylabel("Correlation Score")
     axs[1].set_xticks(np.arange(0, len(all_pc_corr_scores), 1))
+
+    # # Now we plot the results
+    plt.figure(figsize=(16,10))
+    plt.plot(naive_private_guess.squeeze(), label="Reconstruction")
+    plt.plot(test_prv_truth.squeeze(), label="Truth")
+    plt.title("PCA Reconstruction vs Truth")
+    plt.legend()
+    plt.savefig("./figures/mcu_reconstruction.png")
+    plt.close()
+
+    ########################################
+    # Plot principal components as matrix for debugging and save them in figures/pca_components
+    ########################################
+    _, axs = plt.subplots(1, 1, figsize=(16,4))
+    im = axs.matshow(principal_components.T, cmap='viridis')
+    axs.set_title("$M_{PU}$: Public to Private Features HeatMap")
+    axs.set_xlabel("Public Features")
+    axs.set_ylabel("Private Features")
+    axs.set_yticks([])
+    axs.set_xticks(np.arange(0, len(principal_components.T), 1) + 1)
+    plt.colorbar(im)
+    plt.savefig("./figures/pca_components.png")
+    plt.close()
+
+
     
     plt.tight_layout()
     plt.savefig("./figures/pca_heatmap.png")
     plt.close()
 
 def method_1_latent_spc_deco(
-    num_pca_components: int,
-    axs: Axes,
+    num_pcs_to_remove: int,
     pca_components: np.ndarray,
     pub_pc_projected: np.ndarray,
     test_file: np.ndarray,
@@ -395,7 +434,7 @@ def method_1_latent_spc_deco(
     prv_features_idxs: Sequence[int],
     args: argparse.Namespace,
     logger: logging.Logger,
-):
+) -> tuple[float, float]:
     # Method 1. Latent Space Decorrelatio
     pca_reconstructor, pca_model_adversary, retained_components, all_pc_corr_scores = baseline_pca_decorr_adversary_by_pc(
         pca_components,
@@ -403,19 +442,16 @@ def method_1_latent_spc_deco(
         all_train_seqs,
         prv_features_idxs,
         args.batch_size,
-        num_pca_components,
+        num_pcs_to_remove,
         args.epochs,
         args.lr,
         args.device,
         args.wandb_on,
     )
-    print(num_pca_components)
-    print(retained_components.shape)
     # Really quick use the salient heatmap to recover private features
     # private_guess = test_pub.squeeze().dot(M_PU)
 
-    pca_test_entire_file(
-        axs,
+    _, utility, privacy = pca_test_entire_file(
         test_file,
         args.cols_to_hide,
         pca_reconstructor,
@@ -427,36 +463,62 @@ def method_1_latent_spc_deco(
         args.batch_size,
         wandb_on=args.wandb_on
     )
+    return utility, privacy
 
 def method_2_MUI_decorrelation(
-    num_features_to_keep: int,
-    test_file: np.ndarray,
+    num_features_to_remove: int,
+    tot_num_features: int,
+    test_pub: np.ndarray,
+    test_file_rel_pubs: np.ndarray,
     test_prv: np.ndarray,
     M_UI: np.ndarray,
-):
+    M_UU: np.ndarray,
+) -> tuple[int, float, float]:
     """
     Will grab the already pretrained/conditioned M_ui and slowly test the removal of some columns until we get zero utility. Out of it
+    Args:
+        - tot_num_features: Total number of features in the data
+        - num_features_to_remove: Number of features to remove
+        - test_pub: Public data
+        - test_file_rel_pubs: Public data pruned with the deemd most salient feature
+        - test_prv: Private data
+        - pub_features_idxs: Public features indices
+        - priv_features_idxs: Private features indices
+        - M_UI: M_UI matrix
+        - M_UU: M_UU matrix 
+    returns:
+        - most_salient_feat_idx: The most salient feature index
+        - utility: Utility of the model after removing the most salient feature
+        - privacy: Privacy of the model after removing the most salient feature
     """
     assert (
         M_UI.shape[1] == 1
     ), f"Currently only working with a single private component. Instead we got {M_UI.shape}"
-    max_corr_idxs = np.argsort(np.abs(M_UI.squeeze()))[:num_features_to_keep]
+    num_features = tot_num_features
+    num_features_kept = num_features - num_features_to_remove
+    most_correlated_feats_idxs = np.argsort(np.abs(M_UI.squeeze()))[::-1]
+    logger.debug(f"M2: Most correlated feats when remoivng {num_features_to_remove} columns are {most_correlated_feats_idxs}")
+    most_salient_feat_idx = most_correlated_feats_idxs[0]
 
-    M_UI_pruned = M_UI[max_corr_idxs, :]
-    test_file_flattend = test_file.reshape(-1, test_file.shape[-1])
-    test_file_pruned = test_file_flattend[:,max_corr_idxs]
-    test_prv_flattend = test_prv.reshape(-1, test_prv.shape[-1])
+    # test_file_pruned = test_file_flattend[:,max_corr_idxs]
 
-    recovered_private_guess = test_file_pruned.dot(M_UI_pruned)
+    recovered_private_guess = test_file_rel_pubs.dot(M_UI)
+    recovered_public_guess = test_file_rel_pubs.dot(M_UU)
 
-    # DEBUG: FOr now we plot it like this
-    plt.figure(figsize=(16,10))
-    plt.plot(recovered_private_guess.squeeze(), label="Reconstruction")
-    plt.plot(test_prv_flattend, label="Truth")
-    plt.title("PCA Reconstruction vs Truth")
-    plt.legend()
-    plt.savefig(f"./figures/pca/heatmap_mui_reconstruction_{num_features_to_keep}.png")
-    plt.close()
+    inspect_array("recovered_private_guess", recovered_private_guess)
+    test_pca_M_decorrelation(
+        recovered_private_guess,
+        recovered_public_guess,
+        test_pub,
+        test_prv,
+        num_features_kept,
+    )
+
+    # Simply calculate the differences and report them back
+    utility = np.mean((recovered_public_guess - test_pub) ** 2)
+    privacy = -1 * np.mean((recovered_private_guess - test_prv) ** 2)
+
+    return most_salient_feat_idx, utility, privacy
 
     # TODO: Make this work
     # plot_heatmap_and_correlation(
@@ -492,14 +554,34 @@ def main(args: argparse.Namespace):
         True, # Scale
     )
     all_train_seqs = np.concatenate([ seqs for _, seqs in train_seqs.items()], axis=0)
+
+    non_0_idxs = [0,3,4,5,6,7,8,9,10,11,12,13,14,15]
+    test_file = test_file[:,non_0_idxs]
+    all_train_seqs = all_train_seqs[:,:,non_0_idxs]
+
     num_features = all_train_seqs.shape[-1]
     num_pca_components = num_features
-    prv_features_idxs = args.cols_to_hide
+    prv_features_idxs: list[int] = args.cols_to_hide
     pub_features_idxs = list(set(range(num_features)) - set(prv_features_idxs))
+    num_pub_features = len(pub_features_idxs)
     print(f"Public features are {pub_features_idxs}")
     print(f"Private features are {prv_features_idxs}")
     train_pub = all_train_seqs[:,:,pub_features_idxs]
     train_prv = all_train_seqs[:,:,prv_features_idxs]
+
+    corrs = calculate_correlation(
+        train_prv.reshape((-1, train_prv.shape[-1])),
+        train_pub.reshape((-1, train_pub.shape[-1])),
+    )
+    logger.info(f"Correlations are {corrs}")
+    argsort_idxs = np.argsort(np.abs(corrs))[::-1]
+    logger.info(f"With the descending correlation indices: {argsort_idxs}")
+    # Maybe we can plot them as well. 
+    # DO a barplot of the correlations  
+    plt.bar(range(corrs.shape[-1]), corrs.squeeze())
+    plt.xticks(np.arange(0, corrs.shape[-1], 1))
+    plt.savefig("figures/initial_correlations.png")
+    plt.close()
 
     test_pub = test_file[:,pub_features_idxs]
     test_prv = test_file[:,prv_features_idxs]
@@ -515,12 +597,14 @@ def main(args: argparse.Namespace):
     ########################################
     # Get M_UI for the MUI method
     ########################################
-    M_UI, M_UU = pca_decomposition_w_heatmap(
+    M_UI, _ = pca_decomposition_w_heatmap(
         pca_components,
         pca_projected_ds,
         train_pub,
         train_prv,
+        pub_features_idxs,
     )
+    logger.info(f"M_UI components are {M_UI.shape}")
 
     ########################################
     # Figure Initialization
@@ -538,11 +622,22 @@ def main(args: argparse.Namespace):
     ########################################
     # TOREM: Move this lower down for when we are done with it. 
     logger.info("Starting the PCA decorrelation and training")
-    for num_comp in range(num_pca_components): 
+    assert num_features == num_pca_components, "The following loop assumes these are the same amount"
+
+    cur_train_pub = train_pub.copy()
+    # cur_train_prv = train_prv.copy()
+    cur_test_pub = test_pub.copy()
+    # cur_test_prv = test_prv.copy()
+    next_id_to_rm: Optional[int] = None
+    m1_utilities, m1_privacies = [], []
+    m2_utilities, m2_privacies = [], []
+
+    for num_comps_to_remove in range(0,num_pub_features):  # TOREM: change this 1 to 0 later, only for debugging now
         # Method 1. Latent Space Decorrelatio
-        method_1_latent_spc_deco(
-            num_comp,
-            axs,
+        logger.info(f" Before method 1 pca_components shape is : {pca_components.shape}")
+
+        utility, privacy = method_1_latent_spc_deco(
+            num_comps_to_remove,
             pca_components,
             pca_projected_ds,
             test_file,
@@ -551,12 +646,51 @@ def main(args: argparse.Namespace):
             args,
             logger,
         )
-        method_2_MUI_decorrelation(
-            num_comp,
-            test_file,
-            test_prv,
-            M_UI,
+        m1_utilities.append(utility)
+        m1_privacies.append(privacy)
+
+        # Prep data for Method 2
+        if next_id_to_rm is not None:
+            inv_set = list(set(range(cur_train_pub.shape[-1])) - set([next_id_to_rm]))
+            logger.debug(f"M2: inv_set looks like {inv_set}. Where {next_id_to_rm} was removed from {list(range(cur_train_pub.shape[-1]))}")
+            cur_train_pub = cur_train_pub[:,:,inv_set]
+            cur_test_pub = cur_test_pub[:, inv_set]
+
+        new_pca_components, _ = pca_preprocessing(
+            cur_train_pub,
         )
+        new_projected_test_ds = cur_test_pub.dot(new_pca_components)
+
+
+        # inspect_array("new_pca_components", new_pca_components)
+        new_M_UI, new_M_UU = pca_decomposition_w_heatmap(
+            new_pca_components,
+            new_projected_test_ds,
+            test_pub,
+            test_prv,
+            pub_features_idxs,
+        )
+
+        next_id_to_rm, m2_utility, m2_privacy = method_2_MUI_decorrelation(
+            num_comps_to_remove,
+            num_features,
+            test_pub,
+            cur_test_pub,
+            test_prv,
+            new_M_UI,
+            new_M_UU,
+        )
+        m2_utilities.append(m2_utility)
+        m2_privacies.append(m2_privacy)
+
+        # print(f"new_M_UI shape: {new_M_UI.shape} and content: {new_M_UI}")
+        # # DEBUG: Let me just plouyt M_UI here to ensure some level of consistency.
+        # plt.bar(range(new_M_UI.shape[0]), np.abs(new_M_UI.squeeze()))
+        # plt.title(f"M_UI at at comp_remvd {num_comps_to_remove}. (id_rem: {next_id_to_rm})")
+        # plt.savefig(f"figures/new_MUI/initial_correlations_{num_comps_to_remove:02d}.png")
+        # plt.close()
+        # TODO: make sure m2_removed_pub_columns is updated before we leave this loop
+        logger.debug(f"--------------------END OF ITERATION FOR `num_comps_to_remove`={num_comps_to_remove}--------------------")
 
     # retained_components = retained_components.to(device).to(torch.float32)
     # logger.info("PCA training and decorrelation complete. Now testing...")
@@ -571,6 +705,19 @@ def main(args: argparse.Namespace):
     #     args.batch_size,
     #     wandb_on=args.wandb_on
     # )
+
+    # TODO: remove
+    #     method_2_plots(M_PU, all_pc_corr_scores, pca_components, private_guess, test_prv)
+    #
+    # # TODO: Make this work
+    # plot_heatmap_and_correlation(
+    #     M_PU,
+    #     all_pc_corr_scores,
+    #     pca_components,
+    #     private_guess,
+    #     test_prv,
+    # )
+    #
     logger.info("Done with the PCA test")
 
     

@@ -10,8 +10,13 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 import wandb
 
-from conrecon.data.dataset_generation import batch_generation_randUni, collect_n_sequential_batches, spot_backhistory
-from conrecon.utils.graphing import plot_comp, plot_signal_reconstructions
+from conrecon.data.dataset_generation import (
+    batch_generation_randUni,
+    collect_n_sequential_batches,
+    spot_backhistory,
+)
+from conrecon.utils.graphing import plot_comp, plot_given, plot_signal_reconstructions
+
 
 def triv_test_entire_file(
     validation_file: np.ndarray,
@@ -54,9 +59,11 @@ def triv_test_entire_file(
         ########################################
         start_idx = batch_no * batch_size + sequence_length
         end_idx = min((batch_no + 1) * batch_size + sequence_length, val_x.shape[0])
-        backhistory = collect_n_sequential_batches(val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)
+        backhistory = collect_n_sequential_batches(
+            val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value
+        )
         backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
-        backhistory_pub = backhistory[:,:,pub_features_idxs]
+        backhistory_pub = backhistory[:, :, pub_features_idxs]
 
         # TODO: Incorporate Adversary Guess
         adversary_guess = model_adversary(backhistory_pub)
@@ -69,8 +76,8 @@ def triv_test_entire_file(
     ########################################
     adv_to_show = seq_guesses[:, :]
     adv_truth = validation_file[:, private_columns]
-    
-    fig = plt.figure(figsize=(16,10))
+
+    fig = plt.figure(figsize=(16, 10))
     plt.plot(adv_to_show.squeeze().detach().cpu().numpy(), label="Adversary")
     plt.title("Adversary")
     plt.legend()
@@ -89,8 +96,8 @@ def triv_test_entire_file(
 
     return {k: np.mean(v).item() for k, v in metrics.items()}
 
+
 def pca_test_entire_file(
-    axs: Axes,
     test_file: np.ndarray,
     prv_features_idxs: Sequence[int],
     model_recon: nn.Module,
@@ -101,13 +108,23 @@ def pca_test_entire_file(
     logger: logging.Logger,
     batch_size: int = 16,
     wandb_on: bool = False,
-) -> Dict[str, float]:
+) -> tuple[Dict[str, float], float, float]:
     """
     Will run a the test iteration on model with adverasry
     Args:
-        - validation_file: Validation data (file_length, num_features)
-        - model: Model to run the validation on
-        - col_to_predict: (0-index) which column we would like to predict
+        - test_file: Validation data (file_length, num_features)
+        - prv_features_idxs: (0-index) which column we would like to predict
+        - model_recon: Model that will be used to reconstruct public data
+        - model_adversary: Model that will be used to adversariall reconstruct sensitive data
+        - principal_components: Principal Components
+        - sequence_length: Sequence length
+        - padding_value: Padding value
+        - batch_size: Batch size
+        - wandb_on: Wandb on
+    returns:
+        - metrics: Dict of metrics
+        - utility: Utility of the model after removing the most salient feature
+        - privacy: Privacy of the model after removing the most salient feature
     """
     metrics = {
         "recon_loss": [],
@@ -131,8 +148,12 @@ def pca_test_entire_file(
         # Sanitize the data
         ########################################
         start_idx = batch_no * batch_size + sequence_length
-        end_idx = min((batch_no + 1) * batch_size + sequence_length, test_tensor.shape[0]) 
-        backhistory = collect_n_sequential_batches(test_tensor, start_idx, end_idx, sequence_length, padding_value)
+        end_idx = min(
+            (batch_no + 1) * batch_size + sequence_length, test_tensor.shape[0]
+        )
+        backhistory = collect_n_sequential_batches(
+            test_tensor, start_idx, end_idx, sequence_length, padding_value
+        )
         projected_backhistory = torch.matmul(backhistory, principal_components.T)
 
         # TODO: Incorporate Adversary Guess
@@ -152,7 +173,18 @@ def pca_test_entire_file(
     logger.info(f"Plotting reconstruction with {num_principal_components} components")
     pub_features_idxs = list(set(range(test_file.shape[-1])) - set(prv_features_idxs))
     print(pub_features_idxs)
-    plot_comp(test_file, seq_reconstructions.cpu(), pub_features_idxs, f"figures/pca/pca_reconstruction_{num_principal_components}_components")
+    plot_comp(
+        test_file,
+        seq_reconstructions.cpu(),
+        pub_features_idxs,
+        f"figures/pca/pca_reconstruction_{num_principal_components}_components",
+    )
+
+    ########################################
+    # Compute metrics to plot later
+    ########################################
+    utility = torch.mean((seq_reconstructions.cpu() - test_file[sequence_length:, pub_features_idxs]) ** 2).item()
+    privacy = -1 * torch.mean((adv_guesses.cpu() - test_file[sequence_length:, prv_features_idxs]) ** 2).item()
 
     ########################################
     # Chart for Adversary
@@ -168,11 +200,12 @@ def pca_test_entire_file(
 
     # Pass reconstruction and adversary to wandb
     if wandb_on:
-        wandb.log({"adversary": adv_to_show.squeeze().detach().cpu().numpy()})
+        wandb.log({"adversary": adv_to_show.squeeze().detach().cpu().numpy()}) # type: ignore
 
     model_adversary.train()
 
-    return {k: np.mean(v).item() for k, v in metrics.items()}
+    return {k: np.mean(v).item() for k, v in metrics.items()}, utility, privacy
+
 
 def vae_test_file(
     test_file: np.ndarray,
@@ -208,7 +241,9 @@ def vae_test_file(
     # Generate the reconstruction
     public_columns = list(set(range(val_x.shape[-1])) - set(idxs_colsToGuess))
     private_columns = list(idxs_colsToGuess)
-    num_batches = ceil((len(val_x) - sequence_length) / batch_size) ## Subtract sequence_length to avoid padding
+    num_batches = ceil(
+        (len(val_x) - sequence_length) / batch_size
+    )  ## Subtract sequence_length to avoid padding
 
     batch_guesses = []
     batch_sanitized = []
@@ -218,9 +253,13 @@ def vae_test_file(
             ########################################
             # Sanitize the data
             ########################################
-            start_idx = batch_no * batch_size + sequence_length #  Sequence length to avoid padding
+            start_idx = (
+                batch_no * batch_size + sequence_length
+            )  #  Sequence length to avoid padding
             end_idx = min((batch_no + 1) * batch_size + sequence_length, val_x.shape[0])
-            backhistory = collect_n_sequential_batches(val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value)
+            backhistory = collect_n_sequential_batches(
+                val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value
+            )
             backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
             latent_z, sanitized_data, kl_divergence = model_vae(backhistory)
 
@@ -246,7 +285,7 @@ def vae_test_file(
     np.save(f"./results/val_x_{idxs_colsToGuess}.npy", tosave_val_x)
     np.save(f"./results/adv_guesses_y_{idxs_colsToGuess}.npy", tosave_advGuesses_y)
     np.save(f"./results/sanitized_x_{idxs_colsToGuess}.npy", tosave_sanitized)
-    np.save(f"./results/latent_z_{idxs_colsToGuess}.npy", tosave_latent_zs) 
+    np.save(f"./results/latent_z_{idxs_colsToGuess}.npy", tosave_latent_zs)
 
     ########################################
     # Chart For Reconstruction
@@ -254,22 +293,44 @@ def vae_test_file(
 
     # Lets now save the figure
     permd_sanitized_idxs = torch.randperm(len(public_columns))[:8]
-    permd_original_idxs = torch.tensor([public_columns[idx] for idx in permd_sanitized_idxs]).to(torch.long)
+    permd_original_idxs = torch.tensor(
+        [public_columns[idx] for idx in permd_sanitized_idxs]
+    ).to(torch.long)
 
     recon_to_show = seq_sanitized[:, permd_sanitized_idxs]
     truth_to_compare = test_file[:, permd_original_idxs]
-    fig,axs = plt.subplots(4,2,figsize=(32,20))
+    fig, axs = plt.subplots(4, 2, figsize=(32, 20))
     for i in range(recon_to_show.shape[1]):
         mod = i % 4
         idx = i // 4
-        axs[mod,idx].plot(recon_to_show[:,i].squeeze().detach().cpu().numpy(), label="Reconstruction")
-        axs[mod,idx].set_title(f"Reconstruction Vs Truth of $f_{permd_original_idxs[i]}$")
-        axs[mod,idx].legend()
-        axs[mod,idx].plot(truth_to_compare[:,i].squeeze(), label="Truth")
-        axs[mod,idx].legend()
+        axs[mod, idx].plot(
+            recon_to_show[:, i].squeeze().detach().cpu().numpy(), label="Reconstruction"
+        )
+        axs[mod, idx].set_title(
+            f"Reconstruction Vs Truth of $f_{permd_original_idxs[i]}$"
+        )
+        axs[mod, idx].legend()
+        axs[mod, idx].plot(truth_to_compare[:, i].squeeze(), label="Truth")
+        axs[mod, idx].legend()
         if wandb_on:
-            wandb.log({f"Reconstruction (Col {i})": recon_to_show[:,i].squeeze().detach().cpu().numpy()})
-            wandb.log({f"Truth (Col {i})": truth_to_compare[:,i].squeeze().detach().cpu().numpy()})
+            wandb.log(
+                {
+                    f"Reconstruction (Col {i})": recon_to_show[:, i]
+                    .squeeze()
+                    .detach()
+                    .cpu()
+                    .numpy()
+                }
+            )
+            wandb.log(
+                {
+                    f"Truth (Col {i})": truth_to_compare[:, i]
+                    .squeeze()
+                    .detach()
+                    .cpu()
+                    .numpy()
+                }
+            )
     plt.savefig(recon_savefig_loc)
     plt.close()
 
@@ -278,8 +339,8 @@ def vae_test_file(
     ########################################
     adv_to_show = seq_adv_guesses[:, :]
     adv_truth = test_file[:, private_columns]
-    
-    fig = plt.figure(figsize=(16,10))
+
+    fig = plt.figure(figsize=(16, 10))
     plt.plot(adv_to_show.squeeze().detach().cpu().numpy(), label="Adversary")
     plt.title("Adversary")
     plt.legend()
@@ -299,6 +360,7 @@ def vae_test_file(
     model_adversary.train()
 
     return {k: np.mean(v).item() for k, v in metrics.items()}
+
 
 def get_tradeoff_metrics(
     test_file: np.ndarray,
@@ -327,7 +389,9 @@ def get_tradeoff_metrics(
     private_columns = list(idxs_colsToGuess)
     test_pub = test_x[sequence_length:, public_columns]
     test_prv = test_x[sequence_length:, private_columns]
-    num_batches = ceil((len(test_x) - sequence_length) / batch_size) ## Subtract sequence_length to avoid padding
+    num_batches = ceil(
+        (len(test_x) - sequence_length) / batch_size
+    )  ## Subtract sequence_length to avoid padding
 
     ########################################
     # Go through all the public data first
@@ -338,9 +402,13 @@ def get_tradeoff_metrics(
         ########################################
         # Sanitize the data
         ########################################
-        start_idx = batch_no * batch_size + sequence_length #  Sequence length to avoid padding
+        start_idx = (
+            batch_no * batch_size + sequence_length
+        )  #  Sequence length to avoid padding
         end_idx = min((batch_no + 1) * batch_size + sequence_length, test_x.shape[0])
-        backhistory = collect_n_sequential_batches(test_x, start_idx, end_idx, sequence_length, padding_value)
+        backhistory = collect_n_sequential_batches(
+            test_x, start_idx, end_idx, sequence_length, padding_value
+        )
         with torch.no_grad():
             latent_z, sanitized_data, kl_divergence = model_vae(backhistory)
             adversary_guess = model_adversary(latent_z)
@@ -350,9 +418,46 @@ def get_tradeoff_metrics(
     seq_guesses = torch.cat(batch_guesses, dim=0)
     seq_reconstructions = torch.cat(batch_reconstructions, dim=0)
 
-
     # Now we create our average metrics
     recon_mse = torch.mean((seq_reconstructions - test_pub) ** 2)
     adv_mse = torch.mean((seq_guesses - test_prv) ** 2)
 
-    return  adv_mse.item(),-1*recon_mse.item()
+    return adv_mse.item(), -1 * recon_mse.item()
+
+
+def test_pca_M_decorrelation(
+    recovered_private_guess: np.ndarray,
+    recovered_public_guess: np.ndarray,
+    test_pub: np.ndarray,
+    test_prv: np.ndarray,
+    num_features_being_kept: int,
+):
+    # os.makedirs("./figures/pca_triv/", exist_ok=True)
+    # # DEBUG: FOr now we plot it like this
+    # # Plot the private reconstruction
+    # plt.figure(figsize=(16,10))
+    # plt.plot(recovered_private_guess.squeeze(), label="Reconstruction")
+    # plt.plot(test_prv_flattend, label="Truth")
+    # plt.title("PCA Priv Reconstruction vs Truth")
+    # plt.legend()
+    # plt.savefig(f"./figures/pca_triv/heatmap_mui_priv_reconstruction_{num_features_to_keep}.png")
+    # plt.close()
+
+    # # Now the same but for public
+    plot_given(
+        test_pub,
+        recovered_public_guess,
+        "Public Feature Inference",
+        "True Public Features",
+        "Time",
+        "Magnitude",
+        "Feature {} True vs Inference",
+        "Feature Reconstruction Evaluation",
+        f"./figures/pca_triv/heatmap_mui_pub_reconstruction_{num_features_being_kept:02d}.png",
+    )
+
+    plot_signal_reconstructions(
+        test_prv,
+        recovered_private_guess,
+        f"./figures/pca_triv/heatmap_mui_prv_reconstruction_{num_features_being_kept:02d}.png",
+    )
