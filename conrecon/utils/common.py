@@ -94,3 +94,7 @@ def inspect_tensor(prefix: str, tensor: torch.Tensor, verbose: bool = False):
     print(f"({prefix}): Tensor:\n", tensor) 
     if verbose:
         print(f"({prefix}): Array:\n", tensor)
+
+def array_to_csv(arr: np.ndarray, save_path: str):
+    np.savetxt(save_path, arr, delimiter=",")
+
