@@ -182,7 +182,7 @@ def plot_uvps(
             f"Mismatch in {i}th_utilities vs {i}th_privacies vs {i}th_uvp_points function shape: {ith_utilities.shape} and {ith_privacies.shape} and {uvp_points.shape}"
         num_data_points = ith_utilities.shape[0]
 
-        left_hull_x, left_hull_y = paretto_frontier(ith_privacies, ith_utilities, uvp_points)
+        left_hull_x, left_hull_y = paretto_frontier(ith_privacies, ith_utilities)
 
         ax.scatter(ith_privacies, ith_utilities, 
                             color=potential_colors_dot_colors[i],
