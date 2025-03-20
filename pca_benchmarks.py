@@ -1,7 +1,8 @@
 import argparse
 import logging
 from math import ceil
-from typing import List, Optional, OrderedDict, Sequence
+import pickle
+from typing import List, Optional, Sequence
 import os
 
 import debugpy
@@ -632,8 +633,9 @@ def main(args: argparse.Namespace):
     next_id_to_rm: Optional[int] = None
     m1_utilities, m1_privacies = [], []
     m2_utilities, m2_privacies = [], []
+    m1_m2_uvps = []
 
-    for num_comps_to_remove in range(0,num_pub_features):  # TOREM: change this 1 to 0 later, only for debugging now
+    for num_comps_to_remove in range(0,num_pub_features):
         # Method 1. Latent Space Decorrelatio
         logger.info(f" Before method 1 pca_components shape is : {pca_components.shape}")
 
@@ -649,6 +651,7 @@ def main(args: argparse.Namespace):
         )
         m1_utilities.append(utility)
         m1_privacies.append(privacy)
+        m1_m2_uvps.append(num_comps_to_remove)
 
         # Prep data for Method 2
         if next_id_to_rm is not None:
@@ -692,6 +695,18 @@ def main(args: argparse.Namespace):
         # plt.close()
         # TODO: make sure m2_removed_pub_columns is updated before we leave this loop
         logger.debug(f"--------------------END OF ITERATION FOR `num_comps_to_remove`={num_comps_to_remove}--------------------")
+
+    results = PCABenchmarkResults(
+        m1_utilities=m1_utilities,
+        m2_utilities=m2_utilities,
+        m1_privacies=m1_privacies,
+        m2_privacies=m2_privacies,
+        m1_m2_num_removed_components=m1_m2_uvps,
+        num_iterations=num_pub_features,
+    )
+    with open(f"results/results_benchmarks.pkl", "wb") as f:
+        pickle.dump(results, f)
+
 
     # retained_components = retained_components.to(device).to(torch.float32)
     # logger.info("PCA training and decorrelation complete. Now testing...")
