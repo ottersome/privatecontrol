@@ -1,12 +1,13 @@
 import os
 from math import ceil, sqrt
-from typing import Sequence
+from typing import Any, Optional, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import seaborn as sns
 
+from paretto_plots import paretto_frontier
 
 def plot_given(
     func_a: np.ndarray,
@@ -137,3 +138,94 @@ def plot_signal_reconstructions(original, altered_signal, save_name: str, ids=No
     plt.tight_layout()
     plt.savefig(save_name, dpi=300)
     plt.close()
+
+# Warning: Very general use so I will use dictionary to take a varying amount of uvps
+def plot_uvps(
+    uvp_coeffs: list[np.ndarray],
+    utilities: list[np.ndarray],
+    privacies: list[np.ndarray],
+    labels: list[str],
+    save_dest: Optional[str],
+):
+    """
+    All arguments that are list are meant to match in index with other arguments
+    Args:
+        - uvp_coeff: list of uvp coefficients (indep var that determines utilities and privacies)
+        - utilities: list of utilities
+        - privacies: list of privacies
+        - labels: list of labels
+        - save_dest: path to save plot
+    Returns:
+        None
+    """
+    assert len(utilities) == len(privacies) == len(uvp_coeffs), \
+        "We expect equal length across `utilities`, `privacies`, and `uvp_coeff` parameters"
+    amount_dots = len(utilities)
+    plt.style.use("seaborn-v0_8-paper")
+    sns.set_context("paper", font_scale=1.5)
+    
+    # Create figure with appropriate size for paper
+    _, ax = plt.subplots(figsize=(8, 6))  # Standard single-column figure size
+
+    potential_colors_dot_colors = sns.color_palette("husl", amount_dots)
+    
+    texts = []
+    for i in range(amount_dots):
+        # Create the main scatter plot
+        ith_privacies = privacies[i].squeeze()
+        ith_utilities = utilities[i].squeeze()
+        uvp_points = uvp_coeffs[i].squeeze()
+
+
+        assert len(ith_utilities.shape) == len(ith_privacies.shape) == 1 and len(uvp_points.shape) == 1,\
+            f"Can only take 1d {i}th_utilities, 1d {i}th_privacies 1d uvp_points."\
+            "But got {ith_utilities.shape} and {ith_privacies.shape} and {uvp_points.shape}"
+        assert ith_utilities.shape[0] == ith_privacies.shape[0] == uvp_points.shape[0], \
+            f"Mismatch in {i}th_utilities vs {i}th_privacies vs {i}th_uvp_points function shape: {ith_utilities.shape} and {ith_privacies.shape} and {uvp_points.shape}"
+        num_data_points = ith_utilities.shape[0]
+
+        left_hull_x, left_hull_y = paretto_frontier(ith_privacies, ith_utilities, uvp_points)
+
+        ax.scatter(ith_privacies, ith_utilities, 
+                            color=potential_colors_dot_colors[i],
+                            s=80,  # Marker size
+                            alpha=0.7,  # Slight transparency
+                            label=labels[i])
+
+
+        for j in range(num_data_points):
+            uvp = uvp_coeffs[i][j]
+            texts.append(
+                ax.annotate(
+                    f"UVP: {uvp:.3f}",
+                    (ith_privacies[i], ith_utilities[i]),
+                    fontsize=8,
+                )
+            )
+
+        # Plot Pareto frontier
+        ax.plot(left_hull_x, left_hull_y, 
+                color=potential_colors_dot_colors[i],  # Professional green color
+                linestyle='--',
+                alpha=0.8,
+                linewidth=2,
+                label='Pareto frontier')
+    
+    # Customize the plot
+    ax.set_title("Privacy-Utility Trade-off Analysis", 
+                 pad=20, 
+                 fontsize=14, 
+                 fontweight='bold')
+    ax.set_xlabel("Privacy Score (MSE)", labelpad=10)
+    ax.set_ylabel("Utility Score (Negative MSE)", labelpad=10)
+    
+    # Add grid with proper styling
+    ax.grid(True, linestyle='--', alpha=0.3)
+    
+    # Add legend
+    ax.legend(frameon=True, 
+             facecolor='white', 
+             edgecolor='none',
+             loc='best')
+    plt.savefig(save_dest)
+
