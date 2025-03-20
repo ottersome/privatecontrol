@@ -139,7 +139,7 @@ def plot_signal_reconstructions(original, altered_signal, save_name: str, ids=No
 
 # Warning: Very general use so I will use dictionary to take a varying amount of uvps
 def plot_uvps(
-    uvp_coeffs: list[np.ndarray],
+    uvp_coeffs: list[list[str]], 
     utilities: list[np.ndarray],
     privacies: list[np.ndarray],
     labels: list[str],
@@ -148,7 +148,7 @@ def plot_uvps(
     """
     All arguments that are list are meant to match in index with other arguments
     Args:
-        - uvp_coeff: list of uvp coefficients (indep var that determines utilities and privacies)
+        - uvp_coeff: list of uvp coefficients already formatted for printing into the plot
         - utilities: list of utilities
         - privacies: list of privacies
         - labels: list of labels

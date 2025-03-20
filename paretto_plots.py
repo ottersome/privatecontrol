@@ -3,6 +3,7 @@ File to help interpret the results from the paretto simulations
 """
 import argparse
 import os
+import pickle
 
 from adjustText import adjust_text
 import numpy as np
@@ -10,6 +11,8 @@ from scipy import interpolate
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+from conrecon.utils.datatyping import PCABenchmarkResults
+from conrecon.utils.graphing import plot_uvps
 
 def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
@@ -34,11 +37,36 @@ def main(args: argparse.Namespace):
     plt.style.use('seaborn-v0_8-paper')
     sns.set_context("paper", font_scale=1.5)
     
-    # Import data
+    # Import VAE performance data
     data_dir = args.data_dir
-    privacies = np.load(os.path.join(data_dir, "privacies.npy"))
-    utilities = np.load(os.path.join(data_dir, "utilities.npy"))
-    uvps = np.load(os.path.join(data_dir, "uvp.npy"))
+    vae_privacies = np.load(os.path.join(data_dir, "privacies.npy"))
+    vae_utilities = np.load(os.path.join(data_dir, "utilities.npy"))
+    vae_uvps = np.load(os.path.join(data_dir, "uvp.npy"))
+
+    # Import PCA benchmark data
+    # Load the benchmark results
+    benchmarks_metrics = pickle.load(open("./results/results_benchmarks.pkl", "rb"))
+    assert isinstance(benchmarks_metrics, PCABenchmarkResults), f"Expected PCABenchmarkResults but got {type(benchmarks_metrics)}"
+
+    
+    all_labels = ["M1", "M2", "VAE"]
+    m1m2_uvps_str = [f"$C_{{r:{rm_comp}}}$" for rm_comp in benchmarks_metrics.m1_m2_num_removed_components]
+    vae_uvps_str = [fr'$\lambda={uvp:0.4f}$' for uvp in vae_uvps]
+
+    all_uvps = [m1m2_uvps_str, m1m2_uvps_str, vae_uvps_str]
+    all_privacies = benchmarks_metrics.m1_privacies + benchmarks_metrics.m2_privacies + [vae_privacies]
+    all_utilities = benchmarks_metrics.m1_utilities + benchmarks_metrics.m2_utilities + [vae_utilities]
+
+    plot_uvps(
+        all_uvps,
+        all_utilities,
+        all_privacies,
+        all_labels,
+        "figures/all_paretto.png"
+    )
+
+
+    exit()
 
     # Calculate Pareto frontier
     left_hull_x, left_hull_y = paretto_frontier(privacies, utilities, uvps)
