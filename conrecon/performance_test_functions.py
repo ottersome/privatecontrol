@@ -177,7 +177,7 @@ def pca_test_entire_file(
         test_file,
         seq_reconstructions.cpu(),
         pub_features_idxs,
-        f"figures/pca/pca_reconstruction_{num_principal_components}_components",
+        f"figures/pca/pca_reconstruction_{num_principal_components}_components.png",
     )
 
     ########################################

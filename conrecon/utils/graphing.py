@@ -88,7 +88,7 @@ def plot_comp(
         plt.title(f"Feature {i}")
         plt.xlabel("Time")
         plt.ylabel("Value")
-    plt.savefig(f"{save_name}.png")
+    plt.savefig(save_name)
     plt.close()
 
 def plot_signal_reconstructions(original, altered_signal, save_name: str, ids=None) -> None:

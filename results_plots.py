@@ -251,7 +251,7 @@ def main(args: argparse.Namespace):
 
     none_idxs = [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     plot_all(sanitized, none_idxs, "Sanitized")
-    plot_comp(original, sanitized, none_idxs, "Comparison")
+    plot_comp(original, sanitized, none_idxs, "figures/Comparison.png")
 
     # Plot the sanitized
     plot_signal_reconstructions(
