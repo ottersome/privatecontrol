@@ -169,8 +169,26 @@ def baseline_pca_decorr_adversary_by_pc(
     # Plot reconstruction losses
     plt.figure(figsize=(16,10))
     plt.plot(reconstruction_losses)
+    
+    # Find minimum value and its position
+    min_value = np.min(reconstruction_losses)
+    min_index = int(np.argmin(reconstruction_losses))
+    
+    # Add horizontal line at minimum
+    plt.axhline(y=min_value, color='r', linestyle='--', label=f'Min: {min_value:.4f}')
+    
+    # Add a marker at the minimum point
+    plt.plot(min_index, min_value, 'ro', markersize=8)
+    
+    x_tick = min_index + len(reconstruction_losses) * 0.02
+    # Add text annotation for the minimum value
+    plt.text(x_tick, min_value, 
+             f'Min: {min_value:.4f}', verticalalignment='bottom')
+    
     plt.title("Reconstruction Loss")
-    plt.savefig(f"./figures/pca_recon_losses.png")
+    plt.legend()
+    os.makedirs("./figures/method_1_decorr_adv/", exist_ok=True)
+    plt.savefig(f"./figures/method_1_decorr_adv/pca_recon_losses_numRem-{num_pcs_to_remove:02d}.png")
     plt.close()
 
     retained_components = torch.from_numpy(retained_components).to(device).to(torch.float32)
