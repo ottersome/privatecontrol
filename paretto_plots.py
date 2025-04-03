@@ -2,6 +2,7 @@
 File to help interpret the results from the paretto simulations
 """
 import argparse
+from datetime import date
 import os
 import pickle
 
@@ -39,8 +40,8 @@ def main(args: argparse.Namespace):
     
     # Import VAE performance data
     data_dir = args.data_dir
-    vae_privacies = np.load(os.path.join(data_dir, "privacies.npy"))
-    vae_utilities = np.load(os.path.join(data_dir, "utilities.npy"))
+    vae_privacies: list[float] = np.load(os.path.join(data_dir, "privacies.npy")).tolist()
+    vae_utilities: list[float] = np.load(os.path.join(data_dir, "utilities.npy")).tolist()
     vae_uvps = np.load(os.path.join(data_dir, "uvp.npy"))
 
     # Import PCA benchmark data
@@ -51,11 +52,11 @@ def main(args: argparse.Namespace):
     
     all_labels = ["M1", "M2", "VAE"]
     m1m2_uvps_str = [f"$C_{{r:{rm_comp}}}$" for rm_comp in benchmarks_metrics.m1_m2_num_removed_components]
-    vae_uvps_str = [fr'$\lambda={uvp:0.4f}$' for uvp in vae_uvps]
+    vae_uvps_str = [fr'$\lambda={uvp:0.3f}$' for uvp in vae_uvps]
 
     all_uvps = [m1m2_uvps_str, m1m2_uvps_str, vae_uvps_str]
-    all_privacies = benchmarks_metrics.m1_privacies + benchmarks_metrics.m2_privacies + [vae_privacies]
-    all_utilities = benchmarks_metrics.m1_utilities + benchmarks_metrics.m2_utilities + [vae_utilities]
+    all_privacies = [benchmarks_metrics.m1_privacies, benchmarks_metrics.m2_privacies, vae_privacies]
+    all_utilities = [benchmarks_metrics.m1_utilities , benchmarks_metrics.m2_utilities,  vae_utilities]
 
     plot_uvps(
         all_uvps,

@@ -103,6 +103,7 @@ def pca_test_entire_file(
     model_recon: nn.Module,
     model_adversary: nn.Module,
     principal_components: torch.Tensor,
+    train_mean: np.ndarray,
     sequence_length: int,
     padding_value: Optional[int],
     logger: logging.Logger,
@@ -122,7 +123,7 @@ def pca_test_entire_file(
         - batch_size: Batch size
         - wandb_on: Wandb on
     returns:
-        - metrics: Dict of metrics
+        - metrics: Dict of metrics:02d
         - utility: Utility of the model after removing the most salient feature
         - privacy: Privacy of the model after removing the most salient feature
     """
@@ -135,13 +136,13 @@ def pca_test_entire_file(
 
     device = next(model_adversary.parameters()).device
     test_tensor = torch.from_numpy(test_file).to(torch.float32).to(device)
+    train_mean_tensor = torch.from_numpy(train_mean).to(torch.float32).to(device)
 
     num_batches = ceil((len(test_tensor) - sequence_length) / batch_size)
 
     batch_adv_infs = []
     batch_recon_infs = []
-    ########################################
-    # Adversarial Reconstructions
+    ######################################## Adversarial Reconstructions
     ########################################
     for batch_no in range(num_batches):
         ########################################
@@ -154,7 +155,9 @@ def pca_test_entire_file(
         backhistory = collect_n_sequential_batches(
             test_tensor, start_idx, end_idx, sequence_length, padding_value
         )
-        projected_backhistory = torch.matmul(backhistory, principal_components.T)
+        backhistory_centered = backhistory - train_mean_tensor
+        projected_backhistory = torch.matmul(backhistory_centered, principal_components.T)
+        # pca_projected_ds = train_all_centered.dot(principal_components.T)
 
         # TODO: Incorporate Adversary Guess
         with torch.no_grad():
@@ -173,18 +176,19 @@ def pca_test_entire_file(
     logger.info(f"Plotting reconstruction with {num_principal_components} components")
     pub_features_idxs = list(set(range(test_file.shape[-1])) - set(prv_features_idxs))
     print(pub_features_idxs)
+    os.makedirs("./figures/method1", exist_ok=True)
     plot_comp(
         test_file,
         seq_reconstructions.cpu(),
         pub_features_idxs,
-        f"figures/pca/pca_reconstruction_{num_principal_components}_components.png",
+        f"figures/method1/pca_reconstruction_{num_principal_components:02d}_componentsRem.png",
     )
 
     ########################################
     # Compute metrics to plot later
     ########################################
-    utility = torch.mean((seq_reconstructions.cpu() - test_file[sequence_length:, pub_features_idxs]) ** 2).item()
-    privacy = -1 * torch.mean((adv_guesses.cpu() - test_file[sequence_length:, prv_features_idxs]) ** 2).item()
+    utility = -1 * torch.mean((seq_reconstructions.cpu() - test_file[sequence_length:, pub_features_idxs]) ** 2).item()
+    privacy = torch.mean((adv_guesses.cpu() - test_file[sequence_length:, prv_features_idxs]) ** 2).item()
 
     ########################################
     # Chart for Adversary
@@ -195,7 +199,7 @@ def pca_test_entire_file(
     plot_signal_reconstructions(
         test_file[sequence_length:, prv_features_idxs],
         adv_guesses,
-        f"figures/pca/pca_adversary_{num_principal_components}_components",
+        f"figures/method1/pca_adversary_{num_principal_components:02d}_componentsRem",
     )
 
     # Pass reconstruction and adversary to wandb

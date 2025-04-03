@@ -140,8 +140,8 @@ def plot_signal_reconstructions(original, altered_signal, save_name: str, ids=No
 # Warning: Very general use so I will use dictionary to take a varying amount of uvps
 def plot_uvps(
     uvp_coeffs: list[list[str]], 
-    utilities: list[np.ndarray],
-    privacies: list[np.ndarray],
+    utilities: list[list[float]],
+    privacies: list[list[float]],
     labels: list[str],
     save_dest: Optional[str],
 ):
@@ -157,32 +157,28 @@ def plot_uvps(
         None
     """
     assert len(utilities) == len(privacies) == len(uvp_coeffs), \
-        "We expect equal length across `utilities`, `privacies`, and `uvp_coeff` parameters"
-    amount_dots = len(utilities)
+        "We expect equal length across `utilities`, `privacies`, and `uvp_coeff` parameters"\
+        f"Instead we got utilties: {len(utilities)}, privacies: {len(privacies)}, uvp: {len(uvp_coeffs)} "
+    amount_curves = len(utilities)
     plt.style.use("seaborn-v0_8-paper")
     sns.set_context("paper", font_scale=1.5)
+    potential_colors_dot_colors = sns.color_palette("husl", amount_curves)
     
     # Create figure with appropriate size for paper
     _, ax = plt.subplots(figsize=(8, 6))  # Standard single-column figure size
 
-    potential_colors_dot_colors = sns.color_palette("husl", amount_dots)
-    
     texts = []
-    for i in range(amount_dots):
+    for i in range(amount_curves):
         # Create the main scatter plot
-        ith_privacies = privacies[i].squeeze()
-        ith_utilities = utilities[i].squeeze()
-        uvp_points = uvp_coeffs[i].squeeze()
+        ith_privacies = privacies[i]
+        ith_utilities = utilities[i]
+        uvp_points = uvp_coeffs[i]
 
+        assert len(ith_utilities) == len(ith_privacies) == len(uvp_points), \
+            f"Mismatch in {i}th_utilities vs {i}th_privacies vs {i}th_uvp_points function shape: {len(ith_utilities)} and {len(ith_privacies)} and {len(uvp_points)}"
+        num_data_points = len(ith_utilities)
 
-        assert len(ith_utilities.shape) == len(ith_privacies.shape) == 1 and len(uvp_points.shape) == 1,\
-            f"Can only take 1d {i}th_utilities, 1d {i}th_privacies 1d uvp_points."\
-            "But got {ith_utilities.shape} and {ith_privacies.shape} and {uvp_points.shape}"
-        assert ith_utilities.shape[0] == ith_privacies.shape[0] == uvp_points.shape[0], \
-            f"Mismatch in {i}th_utilities vs {i}th_privacies vs {i}th_uvp_points function shape: {ith_utilities.shape} and {ith_privacies.shape} and {uvp_points.shape}"
-        num_data_points = ith_utilities.shape[0]
-
-        left_hull_x, left_hull_y = paretto_frontier(ith_privacies, ith_utilities)
+        left_hull_x, left_hull_y = paretto_frontier(np.array(ith_privacies), np.array(ith_utilities))
 
         ax.scatter(ith_privacies, ith_utilities, 
                             color=potential_colors_dot_colors[i],
@@ -195,7 +191,7 @@ def plot_uvps(
             uvp = uvp_coeffs[i][j]
             texts.append(
                 ax.annotate(
-                    f"UVP: {uvp:.3f}",
+                    uvp,
                     (ith_privacies[i], ith_utilities[i]),
                     fontsize=8,
                 )

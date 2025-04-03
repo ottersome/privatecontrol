@@ -190,7 +190,6 @@ def baseline_pca_decorr_adversary_by_pc(
     os.makedirs("./figures/method_1_decorr_adv/", exist_ok=True)
     plt.savefig(f"./figures/method_1_decorr_adv/pca_recon_losses_numRem-{num_pcs_to_remove:02d}.png")
     plt.close()
-
     retained_components = torch.from_numpy(retained_components).to(device).to(torch.float32)
 
     return reconstructor, adversary, retained_components, all_pc_corr_scores
@@ -308,7 +307,7 @@ def baseline_pca_decorr_adversary_w_threshold(
 
 def pca_preprocessing(
     train_all: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Will preprocess the data for PCA
     args:
@@ -316,11 +315,13 @@ def pca_preprocessing(
     returns:
         - pca_components: Principal Components
         - pca_projected_ds: Projected Public data onto the principal components
+        - train_mean: Mean of the training data
     """ 
 
     pca = PCA()
     train_all_flat = train_all.reshape(-1, train_all.shape[-1])
-    train_all_centered = train_all_flat - np.mean(train_all_flat, axis=0)
+    train_mean = np.mean(train_all_flat, axis=0)
+    train_all_centered = train_all_flat - train_mean
 
     ########################################
     # PCA Fitting
@@ -331,7 +332,7 @@ def pca_preprocessing(
     # Takes in (num_componets, num_features) and returns (num_components, num_samples)
     pca_projected_ds = train_all_centered.dot(principal_components.T)
 
-    return principal_components, pca_projected_ds
+    return principal_components, pca_projected_ds, train_mean
 
 def pca_decomposition_w_heatmap(
     pca_components: np.ndarray,
@@ -452,6 +453,7 @@ def method_1_latent_spc_deco(
     test_file: np.ndarray,
     all_train_seqs: np.ndarray,
     prv_features_idxs: Sequence[int],
+    train_mean: np.ndarray,
     args: argparse.Namespace,
     logger: logging.Logger,
 ) -> tuple[float, float]:
@@ -477,6 +479,7 @@ def method_1_latent_spc_deco(
         pca_reconstructor,
         pca_model_adversary,
         retained_components,
+        train_mean,
         args.episode_length,
         None,
         logger,
@@ -535,8 +538,8 @@ def method_2_MUI_decorrelation(
     )
 
     # Simply calculate the differences and report them back
-    utility = np.mean((recovered_public_guess - test_pub) ** 2)
-    privacy = -1 * np.mean((recovered_private_guess - test_prv) ** 2)
+    utility = -1 * np.mean((recovered_public_guess - test_pub) ** 2)
+    privacy = np.mean((recovered_private_guess - test_prv) ** 2)
 
     return most_salient_feat_idx, utility, privacy
 
@@ -610,7 +613,7 @@ def main(args: argparse.Namespace):
     # PCA Preprocessing
     ########################################
     logger.info("Starting the PCA preprocessing")
-    pca_components, pca_projected_ds = pca_preprocessing(
+    pca_components, pca_projected_ds, train_mean = pca_preprocessing(
         all_train_seqs,
     )
 
@@ -664,6 +667,7 @@ def main(args: argparse.Namespace):
             test_file,
             all_train_seqs,
             prv_features_idxs,
+            train_mean,
             args,
             logger,
         )
@@ -678,7 +682,7 @@ def main(args: argparse.Namespace):
             cur_train_pub = cur_train_pub[:,:,inv_set]
             cur_test_pub = cur_test_pub[:, inv_set]
 
-        new_pca_components, _ = pca_preprocessing(
+        new_pca_components, _, new_train_mean = pca_preprocessing(
             cur_train_pub,
         )
         new_projected_test_ds = cur_test_pub.dot(new_pca_components)
