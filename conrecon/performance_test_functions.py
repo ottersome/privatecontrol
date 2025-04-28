@@ -15,15 +15,15 @@ from conrecon.data.dataset_generation import (
     collect_n_sequential_batches,
     spot_backhistory,
 )
-from conrecon.utils.graphing import plot_comp, plot_given, plot_signal_reconstructions
+from conrecon.utils.graphing import plot_comp, plot_given, plot_signal_reconstructions, plot_single_signal_reconstruction
 
 
 def triv_test_entire_file(
-    validation_file: np.ndarray,
+    test_file: np.ndarray,
     idxs_colsToGuess: Sequence[int],
     model_adversary: nn.Module,
     sequence_length: int,
-    padding_value: int,
+    padding_value: Optional[int],
     batch_size: int = 16,
     wandb_on: bool = False,
 ) -> Dict[str, float]:
@@ -38,21 +38,19 @@ def triv_test_entire_file(
         "recon_loss": [],
         "adv_loss": [],
     }
-    amnt_columns = validation_file.shape[-1]
+    amnt_columns = test_file.shape[-1]
     pub_features_idxs = list(set(range(amnt_columns)) - set(idxs_colsToGuess))
+    print(f"lengtth of pub_features_idxs is {len(pub_features_idxs)}")
 
     model_adversary.eval()
     device = next(model_adversary.parameters()).device
-    val_x = torch.from_numpy(validation_file).to(torch.float32).to(device)
+    val_x = torch.from_numpy(test_file).to(torch.float32).to(device)
 
     # Generate the reconstruction
-    public_columns = list(set(range(val_x.shape[-1])) - set(idxs_colsToGuess))
     private_columns = list(idxs_colsToGuess)
-    num_columns = len(public_columns) + len(private_columns)
     num_batches = ceil((len(val_x) - sequence_length) / batch_size)
 
     batch_guesses = []
-    batch_reconstructions = []
     for batch_no in range(num_batches):
         ########################################
         # Sanitize the data
@@ -60,10 +58,10 @@ def triv_test_entire_file(
         start_idx = batch_no * batch_size + sequence_length
         end_idx = min((batch_no + 1) * batch_size + sequence_length, val_x.shape[0])
         backhistory = collect_n_sequential_batches(
-            val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value
+            val_x, start_idx, end_idx, sequence_length, padding_value
         )
-        backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
         backhistory_pub = backhistory[:, :, pub_features_idxs]
+        print(f"backhistory_pub shape is {backhistory_pub.shape}")
 
         # TODO: Incorporate Adversary Guess
         adversary_guess = model_adversary(backhistory_pub)
@@ -74,19 +72,28 @@ def triv_test_entire_file(
     ########################################
     # Chart for Adversary
     ########################################
-    adv_to_show = seq_guesses[:, :]
-    adv_truth = validation_file[:, private_columns]
+    adv_to_show = seq_guesses[:, :].cpu().detach().numpy()
+    adv_truth = test_file[:, private_columns]
+    print(f"Adv truth shape is {adv_truth.shape}")
+    print(f"Adv to show shape is {adv_to_show.shape}")
 
-    fig = plt.figure(figsize=(16, 10))
-    plt.plot(adv_to_show.squeeze().detach().cpu().numpy(), label="Adversary")
-    plt.title("Adversary")
-    plt.legend()
-    plt.plot(adv_truth.squeeze(), label="Truth")
-    plt.title("Truth")
-    plt.legend()
+    plot_single_signal_reconstruction(
+        adv_truth,
+        adv_to_show,
+        "./figures/vae_non_sanitized.png",
+        "Reconstruction Vs Truth of $f_s$: Non-Sanitized",
+    )
 
-    plt.savefig(f"figures/triv_adversary.png")
-    plt.close()
+    # fig = plt.figure(figsize=(16, 10))
+    # plt.plot(adv_to_show.squeeze().detach().cpu().numpy(), label="Adversary")
+    # plt.title("Adversary")
+    # plt.legend()
+    # plt.plot(adv_truth.squeeze(), label="Truth")
+    # plt.title("Truth")
+    # plt.legend()
+    #
+    # plt.savefig(f"figures/triv_adversary.png")
+    # plt.close()
 
     # Pass reconstruction and adversary to wandb
     if wandb_on:
@@ -217,11 +224,11 @@ def vae_test_file(
     model_vae: nn.Module,
     model_adversary: nn.Module,
     sequence_length: int,
-    padding_value: int,
+    padding_value: Optional[int],
     batch_size: int = 16,
     wandb_on: bool = False,
-    recon_savefig_loc: str = "./figures/vae_reconstruction.png",
-    adv_savefig_loc: str = "./figures/vae_adversary.png",
+    recon_savefig_loc: str = "./figures/model_vae/vae_reconstruction.png",
+    adv_savefig_loc: str = "./figures/model_vae/vae_adversary.png",
 ) -> Dict[str, float]:
     """
     Will run a validation iteration for a model
@@ -234,6 +241,10 @@ def vae_test_file(
         "recon_loss": [],
         "adv_loss": [],
     }
+    recon_base_dir = os.path.basename(recon_savefig_loc)
+    adv_base_dir = os.path.basename(adv_savefig_loc)
+    os.makedirs("./results/model_vae/", exist_ok=True)
+    os.makedirs("./figures/model_vae/", exist_ok=True)
 
     model_vae.eval()
     model_adversary.eval()
@@ -262,9 +273,8 @@ def vae_test_file(
             )  #  Sequence length to avoid padding
             end_idx = min((batch_no + 1) * batch_size + sequence_length, val_x.shape[0])
             backhistory = collect_n_sequential_batches(
-                val_x.cpu().numpy(), start_idx, end_idx, sequence_length, padding_value
+                val_x, start_idx, end_idx, sequence_length, padding_value
             )
-            backhistory = torch.from_numpy(backhistory).to(torch.float32).to(device)
             latent_z, sanitized_data, kl_divergence = model_vae(backhistory)
 
             # TODO: Incorporate Adversary Guess
@@ -295,70 +305,74 @@ def vae_test_file(
     # Chart For Reconstruction
     ########################################
 
-    # Lets now save the figure
-    permd_sanitized_idxs = torch.randperm(len(public_columns))[:8]
-    permd_original_idxs = torch.tensor(
-        [public_columns[idx] for idx in permd_sanitized_idxs]
-    ).to(torch.long)
+    recon_to_show = seq_sanitized
+    truth_to_compare = test_file[:, public_columns]
+    pub_features_idxs = list(set(range(test_file.shape[-1])) - set(idxs_colsToGuess))
+    plot_comp(
+        truth_to_compare,
+        recon_to_show.cpu(),
+        pub_features_idxs,
+        f"figures/method_vae/vae_reconstruction.png",
+    )
 
-    recon_to_show = seq_sanitized[:, permd_sanitized_idxs]
-    truth_to_compare = test_file[:, permd_original_idxs]
-    fig, axs = plt.subplots(4, 2, figsize=(32, 20))
-    for i in range(recon_to_show.shape[1]):
-        mod = i % 4
-        idx = i // 4
-        axs[mod, idx].plot(
-            recon_to_show[:, i].squeeze().detach().cpu().numpy(), label="Reconstruction"
-        )
-        axs[mod, idx].set_title(
-            f"Reconstruction Vs Truth of $f_{permd_original_idxs[i]}$"
-        )
-        axs[mod, idx].legend()
-        axs[mod, idx].plot(truth_to_compare[:, i].squeeze(), label="Truth")
-        axs[mod, idx].legend()
-        if wandb_on:
-            wandb.log(
-                {
-                    f"Reconstruction (Col {i})": recon_to_show[:, i]
-                    .squeeze()
-                    .detach()
-                    .cpu()
-                    .numpy()
-                }
-            )
-            wandb.log(
-                {
-                    f"Truth (Col {i})": truth_to_compare[:, i]
-                    .squeeze()
-                    .detach()
-                    .cpu()
-                    .numpy()
-                }
-            )
-    plt.savefig(recon_savefig_loc)
-    plt.close()
 
+    adv_truth = test_file[:, private_columns]
+    adv_to_show = seq_adv_guesses[:, :].cpu().detach().numpy()
+    plot_signal_reconstructions(
+        adv_truth,
+        adv_to_show,
+        f"figures/method_vae/vae_adversary",
+    )
+
+    # # Lets now save the figure
+    # permd_sanitized_idxs = torch.randperm(len(public_columns))[:8]
+    # permd_original_idxs = torch.tensor(
+    #     [public_columns[idx] for idx in permd_sanitized_idxs]
+    # ).to(torch.long)
+    #
+    # recon_to_show = seq_sanitized[:, permd_sanitized_idxs]
+    # truth_to_compare = test_file[:, permd_original_idxs]
+    # fig, axs = plt.subplots(4, 2, figsize=(32, 20))
+    # for i in range(recon_to_show.shape[1]):
+    #     mod = i % 4
+    #     idx = i // 4
+    #     axs[mod, idx].plot(
+    #         recon_to_show[:, i].squeeze().detach().cpu().numpy(), label="Reconstruction"
+    #     )
+    #     axs[mod, idx].set_title(
+    #         f"Reconstruction Vs Truth of $f_{permd_original_idxs[i]}$"
+    #     )
+    #     axs[mod, idx].legend()
+    #     axs[mod, idx].plot(truth_to_compare[:, i].squeeze(), label="Truth")
+    #     axs[mod, idx].legend()
+    #     if wandb_on:
+    #         wandb.log({f"Reconstruction (Col {i})": recon_to_show[:, i].squeeze().detach().cpu().numpy() })
+    #         wandb.log({f"Truth (Col {i})": truth_to_compare[:, i].squeeze().detach().cpu().numpy() }
+    #         )
+    # plt.savefig(recon_savefig_loc)
+    # plt.close()
+    
     ########################################
     # Chart for Adversary
     ########################################
-    adv_to_show = seq_adv_guesses[:, :]
-    adv_truth = test_file[:, private_columns]
-
-    fig = plt.figure(figsize=(16, 10))
-    plt.plot(adv_to_show.squeeze().detach().cpu().numpy(), label="Adversary")
-    plt.title("Adversary")
-    plt.legend()
-    plt.plot(adv_truth.squeeze(), label="Truth")
-    plt.title("Truth")
-    plt.legend()
-
-    plt.savefig(adv_savefig_loc)
-    plt.close()
-
-    # Pass reconstruction and adversary to wandb
-    if wandb_on:
-        wandb.log({"reconstruction": recon_to_show.squeeze().detach().cpu().numpy()})
-        wandb.log({"adversary": adv_to_show.squeeze().detach().cpu().numpy()})
+    # adv_to_show = seq_adv_guesses[:, :]
+    # adv_truth = test_file[:, private_columns]
+    #
+    # fig = plt.figure(figsize=(16, 10))
+    # plt.plot(adv_to_show.squeeze().detach().cpu().numpy(), label="Adversary")
+    # plt.title("Adversary")
+    # plt.legend()
+    # plt.plot(adv_truth.squeeze(), label="Truth")
+    # plt.title("Truth")
+    # plt.legend()
+    #
+    # plt.savefig(adv_savefig_loc)
+    # plt.close()
+    #
+    # # Pass reconstruction and adversary to wandb
+    # if wandb_on:
+    #     wandb.log({"reconstruction": recon_to_show.squeeze().detach().cpu().numpy()})
+    #     wandb.log({"adversary": adv_to_show.squeeze().detach().cpu().numpy()})
 
     model_vae.train()
     model_adversary.train()
@@ -372,7 +386,7 @@ def get_tradeoff_metrics(
     model_vae: nn.Module,
     model_adversary: nn.Module,
     sequence_length: int,
-    padding_value: int,
+    padding_value: Optional[int],
     batch_size: int = 16,
 ) -> Tuple[float, float]:
     """

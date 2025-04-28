@@ -91,6 +91,43 @@ def plot_comp(
     plt.savefig(save_name)
     plt.close()
 
+
+def plot_single_signal_reconstruction(
+    original: np.ndarray, altered_signal: np.ndarray, save_name: str, title: str
+) -> None:
+    """
+    Plots the original signal and the reconstructed signal for a single signal.
+    Args:
+        original: Original signal (1D array)
+        altered_signal: Reconstructed/Altered signal (1D array)
+        save_name: Path to save the plot
+    Returns:
+        None
+    """
+    basedir = os.path.dirname(save_name)
+    os.makedirs(basedir, exist_ok=True)
+
+    plt.figure(figsize=(8, 6))
+    sns.lineplot(
+        x=np.arange(original.shape[0]),
+        y=original,
+        label="Truth",
+        color="orange",
+    )
+    sns.lineplot(
+        x=np.arange(altered_signal.shape[0]),
+        y=altered_signal,
+        label="Reconstruction",
+        color="blue",
+    )
+    plt.title(title)
+    plt.xlabel("Time")
+    plt.ylabel("Value")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(save_name, dpi=300)
+    plt.close()
+
 def plot_signal_reconstructions(original, altered_signal, save_name: str, ids=None) -> None:
     """
     Plots the original signal and the reconstructed signal
@@ -187,15 +224,15 @@ def plot_uvps(
                             label=labels[i])
 
 
-        for j in range(num_data_points):
-            uvp = uvp_coeffs[i][j]
-            texts.append(
-                ax.annotate(
-                    uvp,
-                    (ith_privacies[i], ith_utilities[i]),
-                    fontsize=8,
-                )
-            )
+        # for j in range(num_data_points):
+        #     uvp = uvp_coeffs[i][j]
+        #     texts.append(
+        #         ax.annotate(
+        #             uvp,
+        #             (ith_privacies[i], ith_utilities[i]),
+        #             fontsize=8,
+        #         )
+        #     )
 
         # Plot Pareto frontier
         ax.plot(left_hull_x, left_hull_y, 

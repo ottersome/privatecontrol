@@ -1,4 +1,5 @@
 import os
+import time
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -228,7 +229,6 @@ def train_adversary(
 def train_vae_and_adversary_bi_level(
     batch_size: int,
     priv_columns: List[int],
-    data_columns: List[str],
     all_train_seqs: torch.Tensor,
     all_valid_seqs: torch.Tensor,
     ds_test:  Optional[np.ndarray], # TOREM: After debugging
@@ -248,10 +248,12 @@ def train_vae_and_adversary_bi_level(
         ds_train: np.ndarray (num_batches, batch_size, features),
     """
 
-    total_num_features = len(data_columns)
+    total_num_features = all_train_seqs.shape[-1]
     pub_columns = list(set(range(total_num_features)) - set(priv_columns))
 
     train_pub = all_train_seqs[:, :, pub_columns]
+    print(f"priv columns are {priv_columns}")
+    print(f"train_prv shape is {all_train_seqs.shape}")
     train_prv = all_train_seqs[:, :, priv_columns]
 
     num_batches = ceil(all_train_seqs.shape[0] / batch_size)
@@ -268,6 +270,7 @@ def train_vae_and_adversary_bi_level(
     for e in tqdm(range(epochs), desc="Epochs"):
         for batch_no in tqdm(range(num_batches), desc="Batches"):
             # Now Get the new VAE generations
+            time_batch_start = time.time()
             batch_all = all_train_seqs[
                 batch_no * batch_size : (batch_no + 1) * batch_size
             ]
@@ -276,6 +279,8 @@ def train_vae_and_adversary_bi_level(
             if batch_pub.shape[0] != batch_size:
                 continue
 
+            time_batch_collect = time.time()
+            logger.debug(f"Batch {batch_no} data collection took {time_batch_collect - time_batch_start} seconds")
             ########################################
             # 1. Get the adversary to guess the sensitive column
             ########################################
@@ -291,6 +296,8 @@ def train_vae_and_adversary_bi_level(
                 priv_columns,
                 batch_size,
             )
+            time_train_adversary = time.time()
+            logger.debug(f"Training the adversary took {time_train_adversary - time_batch_collect} seconds")
             if ds_test is not None:
                 # DEBUG: Check on adversaries performance
                 os.makedirs("./figures/progress/", exist_ok=True)
@@ -306,6 +313,8 @@ def train_vae_and_adversary_bi_level(
                     recon_savefig_loc=f"./figures/progress/vae_reconstruction_{e+1}.png",
                     adv_savefig_loc=f"./figures/progress/vae_adversary_{e+1}.png",
                 )
+            time_test_vae = time.time()
+            logger.debug(f"Testing the VAE took {time_test_vae - time_train_adversary} seconds")
 
             # Now we train the autoencoder to try to fool the adversary
             latent_z, sanitized_data, kl_divergence = model_vae(batch_all[:,:-1,:]) # Do not leak the last element of sequence
@@ -314,10 +323,16 @@ def train_vae_and_adversary_bi_level(
             adversary_guess_flat = model_adversary(latent_z)
             # Check on performance
             batch_y_flat = batch_prv[:, -1, :].view(-1, batch_prv.shape[-1])
-            pub_recon_loss = F.mse_loss(sanitized_data, batch_pub[:, -1, :], reduce=None).mean(-1) # Guesss the set of features of sequence
-            adver_loss = F.mse_loss(adversary_guess_flat, batch_y_flat, reduce=None).squeeze()
+            pub_recon_loss = F.mse_loss(sanitized_data, batch_pub[:, -1, :], reduction="none").mean(-1) # Guesss the set of features of sequence
+            adver_loss = F.mse_loss(adversary_guess_flat, batch_y_flat, reduction="none").squeeze()
+
+            # TEST: Just trying normaliztion
+            pub_recon_norm = pub_recon_loss / (pub_recon_loss.detach() + 1e-8)
+            adver_loss_norm = adver_loss / (adver_loss.detach() + 1e-8)
+
             final_loss_scalar = (
-                pub_recon_loss - priv_utility_tradeoff_coeff * adver_loss + kl_dig_hypr * kl_divergence
+                # pub_recon_loss - priv_utility_tradeoff_coeff * adver_loss + kl_dig_hypr * kl_divergence
+                pub_recon_norm - priv_utility_tradeoff_coeff * adver_loss_norm + kl_dig_hypr * kl_divergence
             ).mean()
 
             recon_losses.append(pub_recon_loss.mean().item())
@@ -325,35 +340,41 @@ def train_vae_and_adversary_bi_level(
 
             model_vae.zero_grad()
             final_loss_scalar.backward()
+
+            # TEST: Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model_adversary.parameters(), max_norm=1.0)
+
             opt_vae.step()
+            time_train_recon = time.time()
+            logger.debug(f"Training the VAE took {time_train_recon - time_test_vae} seconds")
 
-            if wandb_on:
-                wandb.log(
-                    {
-                        "adv_train_loss": adv_train_loss.item(),
-                        "pub_recon_loss": pub_recon_loss.item(),
-                        "final_loss_scalar": final_loss_scalar.item(),
-                    }
-                )
+            # if wandb_on:
+            #     wandb.log(
+            #         {
+            #             "adv_train_loss": adv_train_loss.item(),
+            #             "pub_recon_loss": pub_recon_loss.item(),
+            #             "final_loss_scalar": final_loss_scalar.item(),
+            #         }
+            #     )
 
-            if batch_no % 16 == 0:
-                # TODO: Finish the validation implementaion with correlation
-                # - Log the validation metrics here
-                model_vae.eval()
-                model_adversary.eval()
-                with torch.no_grad():
-                    validation_metrics = calculate_validation_metrics(
-                        all_valid_seqs,
-                        pub_columns,
-                        priv_columns,
-                        model_vae,
-                        model_adversary,
-                    )
-                model_vae.train()
-                model_adversary.train()
-
-                # Report to wandb
-                if wandb_on:
-                    wandb.log(validation_metrics)
+            # if batch_no % 16 == 0:
+            #     # TODO: Finish the validation implementaion with correlation
+            #     # - Log the validation metrics here
+            #     model_vae.eval()
+            #     model_adversary.eval()
+            #     with torch.no_grad():
+            #         validation_metrics = calculate_validation_metrics(
+            #             all_valid_seqs,
+            #             pub_columns,
+            #             priv_columns,
+            #             model_vae,
+            #             model_adversary,
+            #         )
+            #     model_vae.train()
+            #     model_adversary.train()
+            #
+            #     # Report to wandb
+            #     if wandb_on:
+            #         wandb.log(validation_metrics)
 
     return model_vae, model_adversary, recon_losses, adv_losses

@@ -19,8 +19,9 @@ from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.adversaries import Adversary, TrivialTemporalAdversary, PCATemporalAdversary
 from conrecon.dplearning.vae import SequenceToScalarVAE
 from conrecon.utils.common import create_logger, set_seeds
-from conrecon.performance_test_functions import vae_test_file, triv_test_entire_file, pca_test_entire_file
+from conrecon.performance_test_functions import get_tradeoff_metrics, vae_test_file, triv_test_entire_file, pca_test_entire_file
 from conrecon.training_utils import train_vae_and_adversary_bi_level
+from conrecon.utils.graphing import plot_comp, plot_signal_reconstructions
 
 traceback.install()
 
@@ -32,7 +33,7 @@ def argsies() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     # State stuff here
     ap.add_argument(
-        "-e", "--epochs", default=100, help="How many epochs to train for", type=int
+        "-e", "--epochs", default=30, help="How many epochs to train for", type=int
     )
     ap.add_argument("--adversary_epochs", default=1, help="How many epochs to train advesrary for", type=int)
     ap.add_argument("--adv_epoch_subsample_percent", default=0.9, help="How many epochs to train advesrary for", type=int)
@@ -47,7 +48,7 @@ def argsies() -> argparse.Namespace:
     ap.add_argument("--rnn_hidden_size", default=15, type=int)
     ap.add_argument(
         "--cols_to_hide",
-        default=[5],
+        default=[5-2],#NOTE: When you work with this code, keep in mind this hardcoded displacement for the private column
         help="Which are the columsn we want no information of",
     )  # Remember 0-index (so 5th)
     ap.add_argument("--vae_latent_size", default=32, type=int)
@@ -65,7 +66,7 @@ def argsies() -> argparse.Namespace:
     ap.add_argument("--seed", default=0, type=int)
     ap.add_argument("--lr", default=0.001, type=float)
     ap.add_argument("--adversary_hidden_size", default=32, type=int)
-    ap.add_argument("--padding_value", default=-1, type=int)
+    # ap.add_argument("--padding_value", default=-1, type=int)
 
     ap.add_argument("--vae_ds_cache", default=".cache/pykalpkg_vaeds.csv", type=str)
     ap.add_argument("--ds_cache", default=".cache/pykalpkg_ds.csv", type=str)
@@ -188,9 +189,8 @@ def triv_calculate_validation_metrics(
     return validation_metrics
 
 def baseline_trivial_correlation(
-    ds_train: OrderedDict[str, np.ndarray],
-    ds_val: OrderedDict[str, np.ndarray],
-    all_columns: list[str],
+    all_train_seqs: torch.Tensor,
+    all_valid_seqs: torch.Tensor,
     prv_features_idxs: list[int],
     batch_size,
     epochs: int,
@@ -200,15 +200,9 @@ def baseline_trivial_correlation(
     """
     Will try to remove a column and simply try to predict it out of the other ones. 
     """
-    pub_features_idxs  = list(set(range(len(all_columns))) - set(prv_features_idxs))
+    pub_features_idxs  = list(set(range(all_train_seqs.shape[-1])) - set(prv_features_idxs))
 
-    all_train_seqs = np.concatenate([ seqs for _, seqs in ds_train.items()], axis=0)
-    all_valid_seqs = np.concatenate([ seqs for _, seqs in ds_val.items()], axis=0)
     # Shuffle, Batch, Torch Coversion, Feature Separation
-    np.random.shuffle(all_train_seqs)
-    np.random.shuffle(all_valid_seqs)
-    all_train_seqs = torch.from_numpy(all_train_seqs).to(torch.float32).to(device)
-    all_valid_seqs = torch.from_numpy(all_valid_seqs).to(torch.float32).to(device)
     train_pub = all_train_seqs[:,:,pub_features_idxs]
     train_prv = all_train_seqs[:,:,prv_features_idxs]
 
@@ -287,11 +281,7 @@ def main():
         debugpy.listen(("0.0.0.0", args.debug_port))
         debugpy.wait_for_client()
 
-    # TODO: Make it  so that generate_dataset checks if params are the same
     columns, runs_dict, debug_file = load_defacto_data(args.defacto_data_raw_path)
-    num_columns = len(columns)
-    num_private_cols = len(args.cols_to_hide)
-    num_public_cols = num_columns - num_private_cols
 
     # Separate them into their splits (and also interpolate)
     train_seqs, val_seqs, test_file = split_defacto_runs(
@@ -306,10 +296,36 @@ def main():
     logger.info(f"Using device is {device}")
 
     # Get Informaiton for the VAE
+    logger.debug(f"Columns are {columns}")
+    logger.debug(f"Runs dict is {runs_dict}")
+
+    # Prep the data
+    # Information comes packed in dictionary elements for each file. We need to mix it up a bit
+    all_train_seqs = np.concatenate([seqs for _, seqs in train_seqs.items()], axis=0)
+    all_valid_seqs = np.concatenate([seqs for _, seqs in val_seqs.items()], axis=0)
+
+    print(f"Shape of all_train_seqs is {all_train_seqs.shape}")
+    print(f"Shape of test_file is {test_file.shape}")
+    non_0_idxs = [0,3,4,5,6,7,8,9,10,11,12,13,14,15]
+    test_file = test_file[:,non_0_idxs]
+    all_train_seqs = all_train_seqs[:,:,non_0_idxs]
+    
+    # Shuffle, Batch, Torch Coversion, Feature Separation
+    np.random.shuffle(all_train_seqs)
+    np.random.shuffle(all_valid_seqs)
+    all_train_seqs = torch.from_numpy(all_train_seqs).to(torch.float32).to(device)
+    all_valid_seqs = torch.from_numpy(all_valid_seqs).to(torch.float32).to(device)
+
+    num_columns = all_train_seqs.shape[-1]
+    print(f"num_columns is {num_columns}")
+    num_private_cols = len(args.cols_to_hide)
+    num_public_cols = num_columns - num_private_cols
+    print(f"num_public_cols is {num_public_cols}")
+
     ########################################
     # Setup up the models
     ########################################
-    vae_input_size = len(columns) # I think sending all of them is better
+    vae_input_size = num_columns
     # TODO: Get the model going
     model_vae = SequenceToScalarVAE(
         input_size=vae_input_size,
@@ -330,18 +346,6 @@ def main():
     opt_adversary = torch.optim.Adam(model_adversary.parameters(), lr=args.lr)  # type: ignore
     opt_vae = torch.optim.Adam(model_vae.parameters(), lr=args.lr)  # type: ignore
 
-    logger.debug(f"Columns are {columns}")
-    logger.debug(f"Runs dict is {runs_dict}")
-
-    # Prep the data
-    # Information comes packed in dictionary elements for each file. We need to mix it up a bit
-    all_train_seqs = np.concatenate([seqs for _, seqs in train_seqs.items()], axis=0)
-    all_valid_seqs = np.concatenate([seqs for _, seqs in val_seqs.items()], axis=0)
-    # Shuffle, Batch, Torch Coversion, Feature Separation
-    np.random.shuffle(all_train_seqs)
-    np.random.shuffle(all_valid_seqs)
-    all_train_seqs = torch.from_numpy(all_train_seqs).to(torch.float32).to(device)
-    all_valid_seqs = torch.from_numpy(all_valid_seqs).to(torch.float32).to(device)
 
     ########################################
     # Training VAE and Adversary
@@ -350,10 +354,9 @@ def main():
     model_vae, model_adversary, recon_losses, adv_losses = train_vae_and_adversary_bi_level(
         args.batch_size,
         args.cols_to_hide,
-        columns,
         all_train_seqs,
         all_valid_seqs,
-        test_file,
+        None, # TOREM: THis is for making it faster fow now
         args.epochs,
         args.adversary_epochs,
         args.adv_epoch_subsample_percent,
@@ -372,7 +375,8 @@ def main():
         model_vae,
         model_adversary,
         args.episode_length,
-        args.padding_value,
+        # args.padding_value,
+        None, # WE NO LONGER USE padding_value
         args.batch_size,
         wandb_on=args.wandb
     )
@@ -384,13 +388,12 @@ def main():
     # Training Trivial Adversary
     ########################################
     trivial_adverary, adv_losses = baseline_trivial_correlation(
-        train_seqs,
-        val_seqs,
-        columns,
+        all_train_seqs,
+        all_valid_seqs,
         args.cols_to_hide,
-        args.batch_size, args.epochs,
+        args.batch_size,
+        args.epochs,
         args.lr,
-        test_file,
         device,
     )
     plot_single_loss(adv_losses, "Trivial Adversary Losses", "./figures/new_data_vae/trivial-adv_losses.png")
@@ -399,12 +402,27 @@ def main():
         args.cols_to_hide,
         trivial_adverary,
         args.episode_length,
-        args.padding_value,
+        # args.padding_value, # WE NO LONGER USE padding_value
+        None, 
         args.batch_size,
         wandb_on=args.wandb
     )
-    exit()
+    # Need to see this
+    privacy, utility = get_tradeoff_metrics(
+        test_file,
+        args.cols_to_hide,
+        model_vae,
+        model_adversary,
+        args.episode_length,
+        # args.padding_value, # WE NO LONGER USE padding_value
+        None,
+        args.batch_size,
+    )
+    logger.info(f"Final Validation Metrics are {privacy}, {utility}")
+
+
 
 if __name__ == "__main__":
     logger = create_logger("main_vae")
     main()
+

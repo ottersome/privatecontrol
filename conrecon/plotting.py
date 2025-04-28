@@ -14,7 +14,7 @@ from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.text import Text
 
-from .utils import create_logger
+from .utils.common import create_logger
 
 
 class Plot:
