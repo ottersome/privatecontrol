@@ -471,15 +471,13 @@ def plotNSave_heatmap_and_correlation(
     M_PU: np.ndarray,
     all_pc_corr_scores: np.ndarray,
     principal_components: np.ndarray,
-    # naive_private_guess: np.ndarray,
-    # test_prv_truth: np.ndarray,
     pathOut_heatNCor: str,
     pathOut_PCsMat: str,
 ):
     ########################################
     # Plot the HeatMap
     ########################################
-    _, axs = plt.subplots(2, 1, figsize=(16, 8))
+    fig, axs = plt.subplots(2, 1, figsize=(16, 8))
 
     paths = [pathOut_PCsMat, pathOut_heatNCor]
     for path in paths:
@@ -488,34 +486,37 @@ def plotNSave_heatmap_and_correlation(
 
     # Upper subplot: Heatmap
     im = axs[0].matshow(M_PU.T, cmap="viridis")
-    axs[0].set_title("$M_{PU}$: Public to Private Features HeatMap")
-    axs[0].set_xlabel("Public Features")
-    axs[0].set_ylabel("Private Features")
+    axs[0].set_title("$M_{PU}$: Public to Private Features HeatMap", fontsize=14, fontweight='bold')
+    axs[0].set_xlabel("Public Features", fontsize=12)
+    axs[0].set_ylabel("Private Features", fontsize=12)
     axs[0].set_yticks([])
-    # axs[0].set_xticks(np.arange(0, len(M_PU.T), 1) + 1)
-    plt.colorbar(im, ax=axs[0])
+    plt.colorbar(im, ax=axs[0], orientation='horizontal', pad=0.2)
 
     # Lower subplot: Bar plot
-    print(f"Correlation scores are of the shape {all_pc_corr_scores.shape}")
-    axs[1].bar(range(len(all_pc_corr_scores)), all_pc_corr_scores)
-    axs[1].set_title("Correlation Scores")
-    axs[1].set_xlabel("Public Features")
-    axs[1].set_ylabel("Correlation Score")
+    axs[1].bar(range(len(all_pc_corr_scores)), all_pc_corr_scores, color='skyblue')
+    axs[1].set_title("Correlation Scores", fontsize=14, fontweight='bold')
+    axs[1].set_xlabel("Public Features", fontsize=12)
+    axs[1].set_ylabel("Correlation Score", fontsize=12)
     axs[1].set_xticks(np.arange(0, len(all_pc_corr_scores), 1))
-    plt.savefig(pathOut_heatNCor)
+    axs[1].grid(True, linestyle='--', alpha=0.7)
+
+    plt.tight_layout()
+    plt.savefig(pathOut_heatNCor, bbox_inches='tight', dpi=300)
 
     ########################################
     # Plot principal components as matrix for debugging and save them in figures/pca_components
     ########################################
-    _, axs = plt.subplots(1, 1, figsize=(16, 4))
-    im = axs.matshow(principal_components.T, cmap="viridis")
-    axs.set_title("$M_{PU}$: Public to Private Features HeatMap")
-    axs.set_xlabel("Public Features")
-    axs.set_ylabel("Private Features")
-    axs.set_yticks([])
-    axs.set_xticks(np.arange(0, len(principal_components.T), 1) + 1)
-    plt.colorbar(im)
-    plt.savefig(pathOut_PCsMat)
+    fig, ax = plt.subplots(figsize=(16, 4))
+    im = ax.matshow(principal_components.T, cmap="viridis")
+    ax.set_title("Principal Components Matrix", fontsize=14, fontweight='bold')
+    ax.set_xlabel("Public Features", fontsize=12)
+    ax.set_ylabel("Private Features", fontsize=12)
+    ax.set_yticks([])
+    ax.set_xticks(np.arange(0, len(principal_components.T), 1) + 1)
+    plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.2)
+
+    plt.tight_layout()
+    plt.savefig(pathOut_PCsMat, bbox_inches='tight', dpi=300)
     plt.close()
 
 
