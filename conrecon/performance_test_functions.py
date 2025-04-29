@@ -306,7 +306,7 @@ def vae_test_file(
     ########################################
 
     recon_to_show = seq_sanitized
-    truth_to_compare = test_file[:, public_columns]
+    truth_to_compare = test_file
     pub_features_idxs = list(set(range(test_file.shape[-1])) - set(idxs_colsToGuess))
     plot_comp(
         truth_to_compare,
