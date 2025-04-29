@@ -78,8 +78,8 @@ def triv_test_entire_file(
     print(f"Adv to show shape is {adv_to_show.shape}")
 
     plot_single_signal_reconstruction(
-        adv_truth,
-        adv_to_show,
+        adv_truth.squeeze(),
+        adv_to_show.squeeze(),
         "./figures/vae_non_sanitized.png",
         "Reconstruction Vs Truth of $f_s$: Non-Sanitized",
     )
