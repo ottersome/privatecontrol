@@ -61,7 +61,7 @@ def triv_test_entire_file(
             val_x, start_idx, end_idx, sequence_length, padding_value
         )
         backhistory_pub = backhistory[:, :, pub_features_idxs]
-        print(f"backhistory_pub shape is {backhistory_pub.shape}")
+        # print(f"backhistory_pub shape is {backhistory_pub.shape}")
 
         # TODO: Incorporate Adversary Guess
         adversary_guess = model_adversary(backhistory_pub)
@@ -183,12 +183,12 @@ def pca_test_entire_file(
     logger.info(f"Plotting reconstruction with {num_principal_components} components")
     pub_features_idxs = list(set(range(test_file.shape[-1])) - set(prv_features_idxs))
     print(pub_features_idxs)
-    os.makedirs("./figures/method1", exist_ok=True)
+    os.makedirs("./figures/method2", exist_ok=True)
     plot_comp(
         test_file,
         seq_reconstructions.cpu(),
         pub_features_idxs,
-        f"figures/method1/pca_reconstruction_{num_principal_components:02d}_componentsRem.png",
+        f"figures/method2/pca_reconstruction_{num_principal_components:02d}_componentsRem.png",
     )
 
     ########################################
@@ -206,7 +206,7 @@ def pca_test_entire_file(
     plot_signal_reconstructions(
         test_file[sequence_length:, prv_features_idxs],
         adv_guesses,
-        f"figures/method1/pca_adversary_{num_principal_components:02d}_componentsRem",
+        f"figures/method2/pca_adversary_{num_principal_components:02d}_componentsRem",
     )
 
     # Pass reconstruction and adversary to wandb
@@ -251,13 +251,13 @@ def vae_test_file(
     device = next(model_vae.parameters()).device
 
     model_device = next(model_vae.parameters()).device
-    val_x = torch.from_numpy(test_file).to(torch.float32).to(model_device)
+    test_x = torch.from_numpy(test_file).to(torch.float32).to(model_device)
 
     # Generate the reconstruction
-    public_columns = list(set(range(val_x.shape[-1])) - set(idxs_colsToGuess))
+    public_columns = list(set(range(test_x.shape[-1])) - set(idxs_colsToGuess))
     private_columns = list(idxs_colsToGuess)
     num_batches = ceil(
-        (len(val_x) - sequence_length) / batch_size
+        (len(test_x) - sequence_length) / batch_size
     )  ## Subtract sequence_length to avoid padding
 
     batch_guesses = []
@@ -271,9 +271,9 @@ def vae_test_file(
             start_idx = (
                 batch_no * batch_size + sequence_length
             )  #  Sequence length to avoid padding
-            end_idx = min((batch_no + 1) * batch_size + sequence_length, val_x.shape[0])
+            end_idx = min((batch_no + 1) * batch_size + sequence_length, test_x.shape[0])
             backhistory = collect_n_sequential_batches(
-                val_x, start_idx, end_idx, sequence_length, padding_value
+                test_x, start_idx, end_idx, sequence_length, padding_value
             )
             latent_z, sanitized_data, kl_divergence = model_vae(backhistory)
 
@@ -290,7 +290,7 @@ def vae_test_file(
     seq_sanitized = torch.cat(batch_sanitized, dim=0)
     seq_latent_zs = torch.cat(latent_zs, dim=0)
 
-    tosave_val_x = val_x.cpu().numpy()
+    tosave_val_x = test_x.cpu().numpy()
 
     tosave_advGuesses_y = seq_adv_guesses.cpu().numpy()
     tosave_sanitized = seq_sanitized.cpu().numpy()
@@ -460,6 +460,7 @@ def test_pca_M_decorrelation(
     # plt.legend()
     # plt.savefig(f"./figures/pca_triv/heatmap_mui_priv_reconstruction_{num_features_to_keep}.png")
     # plt.close()
+    os.makedirs("./figures/method1", exist_ok=True)
 
     # # Now the same but for public
     plot_given(
@@ -471,11 +472,11 @@ def test_pca_M_decorrelation(
         "Magnitude",
         "Feature {} True vs Inference",
         "Feature Reconstruction Evaluation",
-        f"./figures/pca_triv/heatmap_mui_pub_reconstruction_{num_features_being_kept:02d}.png",
+        f"./figures/method1/heatmap_mui_pub_reconstruction_{num_features_being_kept:02d}.png",
     )
 
     plot_signal_reconstructions(
         test_prv,
         recovered_private_guess,
-        f"./figures/pca_triv/heatmap_mui_prv_reconstruction_{num_features_being_kept:02d}.png",
+        f"./figures/method1/heatmap_mui_prv_reconstruction_{num_features_being_kept:02d}.png",
     )

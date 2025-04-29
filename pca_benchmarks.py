@@ -17,6 +17,7 @@ from tqdm import tqdm
 import wandb
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.adversaries import PCATemporalAdversary
+from conrecon.figures.utils import set_professional_style
 from conrecon.performance_test_functions import (
     pca_test_entire_file,
     test_pca_M_decorrelation,
@@ -232,9 +233,9 @@ def baseline_pca_decorr_adversary_by_pc(
 
     plt.title("Reconstruction Loss")
     plt.legend()
-    os.makedirs("./figures/method_1_decorr_adv/", exist_ok=True)
+    os.makedirs("./figures/method_2_decorr_adv/", exist_ok=True)
     plt.savefig(
-        f"./figures/method_1_decorr_adv/pca_recon_losses_numRem-{num_pcs_to_remove:02d}.png"
+        f"./figures/method_2_decorr_adv/pca_recon_losses_numRem-{num_pcs_to_remove:02d}.png"
     )
     plt.close()
     retained_components = (
@@ -468,15 +469,20 @@ def pca_decomposition_w_heatmap(
 
 
 def plotNSave_heatmap_and_correlation(
-    M_PU: np.ndarray,
+    M_UI: np.ndarray,
     all_pc_corr_scores: np.ndarray,
     principal_components: np.ndarray,
     pathOut_heatNCor: str,
     pathOut_PCsMat: str,
+    # Optional
+    public_feature_names: Optional[list[str]] = None,
+    private_feature_label: str = "Private Feature",
+    heatmap_cmap: str = 'viridis', # Colormap choice
 ):
     ########################################
     # Plot the HeatMap
     ########################################
+    set_professional_style()
     fig, axs = plt.subplots(2, 1, figsize=(16, 8))
 
     paths = [pathOut_PCsMat, pathOut_heatNCor]
@@ -484,43 +490,109 @@ def plotNSave_heatmap_and_correlation(
         dirname = os.path.dirname(path)
         os.makedirs(dirname, exist_ok=True)
 
-    # Upper subplot: Heatmap
-    im = axs[0].matshow(M_PU.T, cmap="viridis")
-    axs[0].set_title("$M_{PU}$: Public to Private Features HeatMap", fontsize=14, fontweight='bold')
-    axs[0].set_xlabel("Public Features", fontsize=12)
-    axs[0].set_ylabel("Private Features", fontsize=12)
+    ########################################
+    # Plot 1: HeatMap and Correlation Scores
+    ########################################
+    # Adjust figsize for a potentially better slide aspect ratio
+    fig1, axs = plt.subplots(2, 1, figsize=(12, 9)) # Slightly less wide, taller
+
+    # --- Upper subplot: Heatmap ---
+    # Use imshow for potentially better aspect control if needed, matshow is fine too
+    influence_values = (M_UI.T - np.min(M_UI.T)) / (np.max(M_UI.T) - np.min(M_UI.T))
+    im = axs[0].matshow(influence_values, cmap=heatmap_cmap, aspect='auto') # Use chosen cmap
+    axs[0].set_title(r"$M_{UI}$: Public-to-Private Feature Influence Mapping", fontweight='bold') # Use r"" for latex
+    axs[0].set_xlabel("Public Features")
+    axs[0].set_ylabel(private_feature_label)
+    # Hide Y ticks if they don't represent meaningful discrete steps (often the case for heatmaps)
     axs[0].set_yticks([])
-    plt.colorbar(im, ax=axs[0], orientation='horizontal', pad=0.2)
+    axs[0].tick_params(axis='x', bottom=True, top=False, labelbottom=True, labeltop=False) # Ensure x-ticks are at bottom
 
-    # Lower subplot: Bar plot
-    axs[1].bar(range(len(all_pc_corr_scores)), all_pc_corr_scores, color='skyblue')
-    axs[1].set_title("Correlation Scores", fontsize=14, fontweight='bold')
-    axs[1].set_xlabel("Public Features", fontsize=12)
-    axs[1].set_ylabel("Correlation Score", fontsize=12)
-    axs[1].set_xticks(np.arange(0, len(all_pc_corr_scores), 1))
-    axs[1].grid(True, linestyle='--', alpha=0.7)
+    # Add a vertical colorbar (often fits better)
+    cbar1 = fig1.colorbar(im, ax=axs[0], orientation='vertical', pad=0.03, shrink=0.8)
+    cbar1.set_label('Influence Value') # Add label to colorbar
 
-    plt.tight_layout()
-    plt.savefig(pathOut_heatNCor, bbox_inches='tight', dpi=300)
+    # --- Lower subplot: Bar plot ---
+    num_features = len(all_pc_corr_scores)
+    feature_indices = np.arange(num_features)
+    # Use the style's default color cycle by not specifying 'color'
+    axs[1].bar(feature_indices, all_pc_corr_scores)
+    axs[1].set_title("Correlation Scores", fontweight='bold')
+    axs[1].set_xlabel("Public Features")
+    axs[1].set_ylabel("Correlation Score")
+
+    # Set x-ticks: Use names if provided, otherwise indices
+    if public_feature_names and len(public_feature_names) == num_features:
+        axs[1].set_xticks(feature_indices)
+        axs[1].set_xticklabels(public_feature_names, rotation=45, ha='right') # Rotate if names are long
+    else:
+        # Show fewer ticks if there are too many features to avoid clutter
+        tick_step = max(1, num_features // 10) # Show ~10 ticks max
+        axs[1].set_xticks(np.arange(0, num_features, tick_step))
+
+    # Customize grid (style sets defaults, but we can override)
+    axs[1].grid(True, axis='y', linestyle='--', alpha=0.5) # Horizontal grid lines only
+    axs[1].grid(False, axis='x') # Turn off vertical grid lines for bar chart
+
+    # Improve layout
+    fig1.tight_layout(pad=2.0) # Add padding between plots and edges
+
+    # Save the figure
+    plt.savefig(pathOut_heatNCor, bbox_inches='tight')
+    print(f"Saved combined heatmap and correlation plot to: {pathOut_heatNCor}")
+    plt.close(fig1) # Close the figure to free memory
 
     ########################################
-    # Plot principal components as matrix for debugging and save them in figures/pca_components
+    # Plot 2: Principal Components Heatmap
     ########################################
-    fig, ax = plt.subplots(figsize=(16, 4))
-    im = ax.matshow(principal_components.T, cmap="viridis")
-    ax.set_title("Principal Components Matrix", fontsize=14, fontweight='bold')
-    ax.set_xlabel("Public Features", fontsize=12)
-    ax.set_ylabel("Private Features", fontsize=12)
-    ax.set_yticks([])
-    ax.set_xticks(np.arange(0, len(principal_components.T), 1) + 1)
-    plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.2)
+    fig2, ax = plt.subplots(figsize=(12, 4)) # Adjust size
 
-    plt.tight_layout()
-    plt.savefig(pathOut_PCsMat, bbox_inches='tight', dpi=300)
-    plt.close()
+    # Assuming principal_components rows are components, columns are original features
+    # If we want PC vs Public Features, we might not need transpose depending on shape
+    # Original code used principal_components.T - assuming Private Features vs Public Features?
+    # Let's assume shape is (n_components, n_public_features) and we want to show this.
+    # If the intent was (n_public_features, n_private_features) like M_PU, transpose it.
+    # Sticking to original code's transpose:
+    pc_data = principal_components.T
+    num_public_features_pc = pc_data.shape[1]
+    num_private_features_pc = pc_data.shape[0]
+
+    im_pc = ax.matshow(pc_data, cmap=heatmap_cmap, aspect='auto')
+    ax.set_title("Principal Components Matrix", fontweight='bold')
+    ax.set_xlabel("Public Features")
+    ax.set_ylabel(private_feature_label) # Reuse label, assuming it corresponds
+
+    # Ticks for PC heatmap
+    ax.tick_params(axis='x', bottom=True, top=False, labelbottom=True, labeltop=False)
+    if public_feature_names and len(public_feature_names) == num_public_features_pc:
+        ax.set_xticks(np.arange(num_public_features_pc))
+        ax.set_xticklabels(public_feature_names, rotation=45, ha='right')
+    else:
+        tick_step_pc = max(1, num_public_features_pc // 10)
+        ax.set_xticks(np.arange(0, num_public_features_pc, tick_step_pc))
+        # Add labels for indices if no names provided
+        ax.set_xticklabels(np.arange(0, num_public_features_pc, tick_step_pc))
 
 
-def method_1_latent_spc_deco(
+    # Y-ticks for PC heatmap: Show if the number of private features/components is small
+    if num_private_features_pc <= 10: # Show ticks if 10 or fewer
+         ax.set_yticks(np.arange(num_private_features_pc))
+         # You could add labels here if they represent specific components, e.g., ["PC1", "PC2", ...]
+         # ax.set_yticklabels([f"Component {i+1}" for i in range(num_private_features_pc)])
+    else:
+         ax.set_yticks([]) # Hide if too many
+
+
+    # Add vertical colorbar
+    cbar2 = fig2.colorbar(im_pc, ax=ax, orientation='vertical', pad=0.03, shrink=0.8)
+    cbar2.set_label('Component Value')
+
+    fig2.tight_layout(pad=1.5)
+    plt.savefig(pathOut_PCsMat, bbox_inches='tight')
+    print(f"Saved Principal Components heatmap to: {pathOut_PCsMat}")
+    plt.close(fig2) # Close the figure
+
+
+def method_2_latent_spc_deco(
     num_pcs_to_remove: int,
     pca_components: np.ndarray,
     pub_pc_projected: np.ndarray,
@@ -531,6 +603,7 @@ def method_1_latent_spc_deco(
     args: argparse.Namespace,
     logger: logging.Logger,
 ) -> tuple[float, float]:
+    os.makedirs("./figures/method2/", exist_ok=True)
     # Method 1. Latent Space Decorrelatio
     pca_reconstructor, pca_model_adversary, retained_components, all_pc_corr_scores = (
         baseline_pca_decorr_adversary_by_pc(
@@ -565,7 +638,7 @@ def method_1_latent_spc_deco(
     return utility, privacy
 
 
-def method_2_MUI_decorrelation(
+def method_1_MUI_decorrelation(
     num_features_to_remove: int,
     tot_num_features: int,
     test_pub: np.ndarray,
@@ -746,7 +819,7 @@ def main(args: argparse.Namespace):
             f" Before method 1 pca_components shape is : {pca_components.shape}"
         )
 
-        utility, privacy = method_1_latent_spc_deco(
+        utility, privacy = method_2_latent_spc_deco(
             num_comps_to_remove,
             pca_components,
             pca_projected_ds,
@@ -784,7 +857,7 @@ def main(args: argparse.Namespace):
             pub_features_idxs,
         )
 
-        next_id_to_rm, m2_utility, m2_privacy = method_2_MUI_decorrelation(
+        next_id_to_rm, m2_utility, m2_privacy = method_1_MUI_decorrelation(
             num_comps_to_remove,
             num_features,
             test_pub,
@@ -800,7 +873,7 @@ def main(args: argparse.Namespace):
         pear_scores, spear_scores = singleCol_compute_correlations(cur_test_pub, cur_test_prv.squeeze())
         plotNSave_heatmap_and_correlation(
             new_M_UI,
-            pear_scores,
+            np.abs(pear_scores),
             pca_components,
             f"./figures/heatmap_debugging/pca_heatmap_removedComps-{num_comps_to_remove:02d}.png",
             f"./figures/heatmap_debugging/pcs_debug_removedComps-{num_comps_to_remove:02d}.png",

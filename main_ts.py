@@ -114,7 +114,7 @@ def argsies() -> argparse.Namespace:
     )
     ap.add_argument(
         "--priv_utility_tradeoff_coeff",
-        default=1,
+        default=0.5,
         # default=4,
         type=float,
         help="The threshold for retaining principal components",
