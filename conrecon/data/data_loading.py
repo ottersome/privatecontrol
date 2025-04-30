@@ -124,34 +124,59 @@ def randomly_pick_sequences_and_split(run: np.ndarray, split_percentage: List[fl
     return train_seqs, val_seqs, np.array([])
 
 def space_divisor(space_size: int, min_window_size: int, num_chunks: int) -> List[int]:
+    """
+    Mostly used for creating validation data.
+    Given a (sub)space size it will try to divide it into `num_chunks` chunks of randomly different size.
 
+    Variables (3)
+    ---------
+    - space_size (int): How long the run is
+    - min_window_size (int): The expected size of the input sequence for the downstream RNN
+    - num_chunks (int): Number of discrete chunks scattered across the run that will be used for validation.
+
+    Returns (1)
+    ---------
+    - chunks (List[int]): calculated chunk sizes.
+    """
     assert space_size / min_window_size >= num_chunks, f"Space of size {space_size} cannot be divided into {num_chunks} chunks whilst keeping a minimum window size of {min_window_size}"
 
-    chunks = [min_window_size] * num_chunks 
+    chunks_sizes = [min_window_size] * num_chunks 
     space_remaining = space_size - min_window_size * num_chunks 
 
     budget = space_remaining
 
     for i in range(num_chunks-1):
         to_add = random.randint(0,budget)
-        chunks[i] = chunks[i] + to_add
+        chunks_sizes[i] = chunks_sizes[i] + to_add
         budget -= to_add
 
-    chunks[-1] += budget
-    random.shuffle(chunks)
-    return chunks
+    chunks_sizes[-1] += budget
+    random.shuffle(chunks_sizes)
+    return chunks_sizes
 
 
-def cast_chunks(total_space: int, chunks: list, min_width: int) -> List[Tuple[int, int]]:
+def cast_chunks(total_space: int, chunks_sizes: list, min_width: int) -> List[Tuple[int, int]]:
     """
-    Randomly casts the given chunks into a larger space, ensuring spacing between chunks
-    is at least min_width.
+    Given `chunk_sizes` it will cast/spread them across the larger `space`.
+    It will ensure proper (able to fit `min_width` spacing) spacing between chunks.
+
+    Variables (3)
+    ---------
+    - total_space (int): Size of super space
+    - chunk_sizes list[int]: Sizes of chunks to cast/spread around `total_space`.
+    - min_width (int): Generally represents the sequence length given to dowsntream RNNS.
+      More specific to this function. Simply ensures that gaps can fit desired sequence lengths.
+
+    Returns (1)
+    ---------
+    - positions (list[tuple[int,int]]): List of starting and ending positions of chunks
     """
-    assert sum(chunks) + (len(chunks) - 1) * min_width <= total_space, "Not enough space to ensure min_width gaps."
+    
+    assert sum(chunks_sizes) + (len(chunks_sizes) - 1) * min_width <= total_space, "Not enough space to ensure min_width gaps."
     
     positions = []
-    remaining_space = total_space - sum(chunks)
-    num_gaps = len(chunks) - 1
+    remaining_space = total_space - sum(chunks_sizes)
+    num_gaps = len(chunks_sizes) - 1
     gap_sizes = [min_width] * num_gaps  # Start with minimum gaps
     
     remaining_space -= sum(gap_sizes)
@@ -162,10 +187,10 @@ def cast_chunks(total_space: int, chunks: list, min_width: int) -> List[Tuple[in
         gap_sizes[i] += add_size
         remaining_space -= add_size
     
-    current_pos = 0
-    for chunk, gap in zip(chunks, gap_sizes + [0]):
-        positions.append((current_pos, current_pos + chunk))
-        current_pos += chunk + gap
+    current_pos = 0 # FIX: Not super happy that we force the first chunk to start from 0
+    for chunk_size, gap in zip(chunks_sizes, gap_sizes + [0]):
+        positions.append((current_pos, current_pos + chunk_size))
+        current_pos += chunk_size + gap
     
     return positions
 
@@ -189,20 +214,20 @@ def randomly_pick_sequences_split_and_oversample(
     run_length = run.shape[0]
     quotient = run_length // seq_len
 
+    # Data preprocessing
     amounts = int(quotient * oversample_coefficient)
     train_amount = int(amounts * split_percentage[0])
-    val_amount = int(amounts * split_percentage[1])
     validation_amount = int(amounts * split_percentage[1])
-
     validation_window_length = int(run_length * split_percentage[1])
 
     # We shall simply chose how to divide the validation length such that our tiniest still holds atleast seq_len 
     num_chunks = 5 # TODO: fix the hardcode 
 
+    # Divide the space for it to be sampled afterwards
     val_chunks = space_divisor(validation_window_length, seq_len, num_chunks)
     val_chunks_positions = cast_chunks(run_length, val_chunks, seq_len)
 
-    # Now we decide a chunk at random 
+    # Now we sample a chunk at random, and sample a `backhistory` from it
     validation_sequences = []
     for val_selection in range(validation_amount):
         # Select chunk at random 
