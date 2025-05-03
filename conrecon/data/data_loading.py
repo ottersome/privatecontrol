@@ -366,19 +366,19 @@ def split_defacto_runs(
 
     return train_ds, val_ds, test_file
 
-def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray], pd.DataFrame]:
+def load_defacto_data(path: str) -> Tuple[OrderedDict[str, np.ndarray], list[str]]:
     """
-    Load the data from the already-split files
-    Also does interpolation
+    Load the data from multiple files referencing different runs.
 
     Returns:
-        - columns_so_far: The columns that are shred across all runs
-        - obtained_runs: A dictionary with the runs as keys and the data as values
+        - obtained_runs: A dictionary with the runs as keys and the data as values. 
+          Keys are sorted by the run number.
+        - columns_so_far: The columns that are shared across all runs
     """
 
     # Create a list of files starting with `run_` inside of the path
     columns_so_far = []
-    files = []
+    files: list[str] = []
     # These files do *NOT* include interpolation. Instead (I Think they have empty or zero elements)
     for ff in os.listdir(path):
         if ff.startswith("run_"):
@@ -391,12 +391,12 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
                     raise ValueError("Columns are not the same for all runs")
             files.append(ff)
 
+    obtained_files = "\n".join([f"\t- {file_name}" for file_name in files])
+    print(f"All files obtained in load_defacto_data are :\n{obtained_files}")
+
     # Organize them by number after the run_
-    test_file = files[-1]
-    test_file = pd.read_csv(os.path.join(path,test_file), header=0)
-    files = files[:-1]
     sorted_files = sorted(files, key=lambda x: int(x.split(".")[0].split("run_")[1]))
-    obtained_runs = OrderedDict({ f_name : np.ndarray([]) for f_name in sorted_files })
+    obtained_runs: OrderedDict[str, np.ndarray] = OrderedDict({ f_name : np.ndarray([]) for f_name in sorted_files })
 
     # Debug: Leave one out and see where things are going.
 
@@ -409,9 +409,8 @@ def load_defacto_data(path: str) -> Tuple[List[str], OrderedDict[str, np.ndarray
         df.dropna(inplace=True)
         obtained_runs[f] = df.values # NOTE: Confirm this doing what we expect it to 
 
-    assert isinstance(test_file, pd.DataFrame)
     # Let me see how it looks
-    return columns_so_far, obtained_runs, test_file
+    return obtained_runs, columns_so_far
 
 
 def new_format(path: str, features_per_run: int = 15):
