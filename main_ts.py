@@ -19,7 +19,7 @@ from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.adversaries import Adversary, TrivialTemporalAdversary, PCATemporalAdversary
 from conrecon.dplearning.vae import SequenceToScalarVAE
 from conrecon.utils.common import create_logger, set_seeds
-from conrecon.performance_test_functions import get_tradeoff_metrics, vae_test_file, triv_test_entire_file, pca_test_entire_file
+from conrecon.performance_test_functions import get_tradeoff_metrics, advVae_test_file, triv_test_entire_file, pca_test_entire_file
 from conrecon.training_utils import train_vae_and_adversary_bi_level
 from conrecon.utils.graphing import plot_comp, plot_signal_reconstructions
 
@@ -338,7 +338,7 @@ def main():
         args.priv_utility_tradeoff_coeff,
     )
     plot_training_losses(recon_losses, adv_losses, f"./figures/new_data_vae/recon-adv_losses.png")
-    metrics = vae_test_file(
+    metrics = advVae_test_file(
         test_file,
         args.cols_to_hide,
         model_vae,

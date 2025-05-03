@@ -23,7 +23,7 @@ from conrecon.plotting import TrainLayout
 from conrecon.utils.common import create_logger
 from conrecon.validation_functions import calculate_validation_metrics
 from conrecon.performance_test_functions import (
-    vae_test_file,
+    advVae_test_file,
     triv_test_entire_file,
     pca_test_entire_file,
 )
@@ -301,7 +301,7 @@ def train_vae_and_adversary_bi_level(
             if ds_test is not None:
                 # DEBUG: Check on adversaries performance
                 os.makedirs("./figures/progress/", exist_ok=True)
-                metrics = vae_test_file(
+                metrics = advVae_test_file(
                     ds_test,
                     priv_columns,
                     model_vae,
