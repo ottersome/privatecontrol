@@ -241,14 +241,11 @@ def vae_test_file(
         "recon_loss": [],
         "adv_loss": [],
     }
-    recon_base_dir = os.path.basename(recon_savefig_loc)
-    adv_base_dir = os.path.basename(adv_savefig_loc)
     os.makedirs("./results/model_vae/", exist_ok=True)
     os.makedirs("./figures/model_vae/", exist_ok=True)
 
     model_vae.eval()
     model_adversary.eval()
-    device = next(model_vae.parameters()).device
 
     model_device = next(model_vae.parameters()).device
     test_x = torch.from_numpy(test_file).to(torch.float32).to(model_device)

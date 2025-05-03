@@ -465,7 +465,6 @@ class SequenceToScalarVAE(nn.Module):
         super(SequenceToScalarVAE, self).__init__()
 
         # This one will have a RNN For encodeing the state data
-        self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
         self.path_encoder = nn.LSTM(
             input_size=input_size,
             hidden_size=rnn_hidden_size,
@@ -486,9 +485,6 @@ class SequenceToScalarVAE(nn.Module):
         self.logger = create_logger(__class__.__name__)
 
         self.relu = nn.ReLU()
-
-        # Start with normal Normal distribution
-        self.N = Normal(0, 1)
 
     def encode(self, x):
         # This normally expects (batch_size, sequence_length, input_size)

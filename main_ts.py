@@ -43,17 +43,17 @@ def argsies() -> argparse.Namespace:
         type=str,
         help="Where to load the data from",
     )
-    ap.add_argument("--batch_size", default=64, type=int)
-    ap.add_argument("--rnn_num_layers", default=2, type=int)
-    ap.add_argument("--rnn_hidden_size", default=15, type=int)
+    ap.add_argument("--batch_size", default=32, type=int)
+    ap.add_argument("--rnn_num_layers", default=1, type=int)
+    ap.add_argument("--rnn_hidden_size", default=64, type=int)
     ap.add_argument(
         "--cols_to_hide",
         default=[5-2],#NOTE: When you work with this code, keep in mind this hardcoded displacement for the private column
         help="Which are the columsn we want no information of",
     )  # Remember 0-index (so 5th)
-    ap.add_argument("--vae_latent_size", default=32, type=int)
+    ap.add_argument("--vae_latent_size", default=64, type=int)
     ap.add_argument("--episode_length", default=32, type=int)
-    ap.add_argument("--vae_hidden_size", default=32, type=int)
+    ap.add_argument("--vae_hidden_size", default=64, type=int)
     ap.add_argument(
         "--splits",
         default={"train_split": 0.8, "val_split": 0.2, "test_split": 0.0},
@@ -62,26 +62,8 @@ def argsies() -> argparse.Namespace:
     )
     ap.add_argument("--kl_dig_hypr", "-k", default=0.001, type=float)
 
-    ap.add_argument("--no-autoindent")
     ap.add_argument("--seed", default=0, type=int)
     ap.add_argument("--lr", default=0.001, type=float)
-    ap.add_argument("--adversary_hidden_size", default=32, type=int)
-    # ap.add_argument("--padding_value", default=-1, type=int)
-
-    ap.add_argument("--vae_ds_cache", default=".cache/pykalpkg_vaeds.csv", type=str)
-    ap.add_argument("--ds_cache", default=".cache/pykalpkg_ds.csv", type=str)
-    ap.add_argument(
-        "--saveplot_dest",
-        default="./figures/pykalman_transformer/",
-        help="Where to save the outputs",
-    )
-
-    ap.add_argument(
-        "--eval_interval", default=100, help="How many epochs to train for", type=int
-    )
-    ap.add_argument(
-        "--eval_size", default=4, help="How many systems to generate", type=int
-    )
 
     ap.add_argument(
         "--debug",
@@ -96,25 +78,14 @@ def argsies() -> argparse.Namespace:
         help="Port to attach debugpy to listen to.",
     )
     ap.add_argument(
-        "--shuffle",
-        action="store_false",
-        help="Whether or not to shuffle the data",
-    )
-    ap.add_argument(
         "--wandb",
         "-w",
         action="store_true",
         help="Whether or not to use wandb for logging",
     )
     ap.add_argument(
-        "--correlation_threshold",
-        default=0.1,
-        type=float,
-        help="The threshold for retaining principal components",
-    )
-    ap.add_argument(
         "--priv_utility_tradeoff_coeff",
-        default=0.5,
+        default=1,
         # default=4,
         type=float,
         help="The threshold for retaining principal components",
@@ -128,8 +99,6 @@ def argsies() -> argparse.Namespace:
 
     args = ap.parse_args()
 
-    if not os.path.exists(args.saveplot_dest):
-        os.makedirs(args.saveplot_dest)
     if not os.path.exists(".cache/"):
         os.makedirs(".cache/")
     return args
