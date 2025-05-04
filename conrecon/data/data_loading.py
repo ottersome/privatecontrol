@@ -314,50 +314,74 @@ def visualize_windows(
 def split_defacto_runs(
     run_dict: OrderedDict[str, np.ndarray], 
     train_split: float,
+    test_file_name: str, 
     val_split: float,
     seq_length: int, 
     oversample_coefficient: float,
     scale: bool,
 ) -> Tuple[OrderedDict[str, np.ndarray], OrderedDict[str, np.ndarray], np.ndarray]:
     """
-    Will basically split the output of load_defacto_data into train, validation and test
-    Every run will be split into train, validation and test
+    Will basically split the output of `load_defacto_data` into train, validation and test.
     Test split will be an entirely different file
+
+    Args:
+        run_dict: The dictionary of runs.
+        train_split: The percentage of the data to be used for training.
+        test_file_key: The key of the test file. It will be popped from the run_dict.
+        val_split: The percentage of the data to be used for validation.
+        seq_length: The length of the episode.
+        oversample_coefficient: The coefficient to oversample the data.
+        scale: Whether or not to scale the data.
     """
 
-    # Ensure test_split + val_split = 1
-    if abs((train_split + val_split) - 1) > 0.001:
-        raise RuntimeError(f"train_split ({train_split}) + val_split ({val_split} !~ 1)")
+    ########################################
+    # Some important assertions
+    ########################################
+    assert np.isclose(
+        train_split + val_split, 1
+    ), f"The sum of train_split ({train_split}) and val_split ({val_split}) must be 1."
+    assert test_file_name in run_dict.keys(), f"The test file {test_file_name} is not in the run_dict"
 
     train_ds = OrderedDict()
     val_ds = OrderedDict()
 
     split_percentages = [train_split, val_split]
 
-    # Order (perhaps not necessary run_dict)
-    sorted_run_dict = dict(
-        sorted(
-            run_dict.items(),
-            key=lambda x: int(re.search("(\d+)\.csv$", x[0]).group(1))
-        )
-    )
+    # # Order (perhaps not necessary run_dict)
+    # sorted_run_dict = dict(
+    #     sorted(
+    #         run_dict.items(),
+    #         key=lambda x: int(re.search("(\d+)\.csv$", x[0]).group(1))
+    #     )
+    # )
 
     # Test DS will be returned as entire file as we might want the time order untouched
-    _, test_file = sorted_run_dict.popitem()
+    # _, test_file = sorted_run_dict.popitem()
+    test_file = run_dict.pop(test_file_name)
 
-    all_train = [] # So normalization is simpler
-    for run_name in sorted_run_dict.keys():
-        run = sorted_run_dict[run_name]
-        all_train.append(run)
-        train_ds[run_name], val_ds[run_name], _  = randomly_pick_sequences_split_and_oversample(run, split_percentages, seq_length, oversample_coefficient)
-    all_train.append(test_file) # So we can scale the features
+    ########################################
+    # Pick Sequences
+    ########################################
+    all_across_splits = [] # So normalization is simpler
+    for run_name in run_dict.keys():
+        run = run_dict[run_name]
+        all_across_splits.append(run)
+        train_ds[run_name], val_ds[run_name], _ = (
+            randomly_pick_sequences_split_and_oversample(
+                run, split_percentages, seq_length, oversample_coefficient
+            )
+        )
+    all_across_splits.append(test_file)  # So we can scale the features
 
-    all_train = np.concatenate(all_train)
+    all_across_splits = np.concatenate(all_across_splits)
 
+    ########################################
+    # Scale the data
+    ########################################
     if scale: 
         scaler = MinMaxScaler()
-        scaler.fit(all_train)
-        for run_name in sorted_run_dict:
+        scaler.fit(all_across_splits)
+        for run_name in run_dict:
             train_ds[run_name] = scaler.transform(train_ds[run_name].reshape(-1, train_ds[run_name].shape[2])).reshape(-1, seq_length, train_ds[run_name].shape[2])
             if len(val_ds[run_name]) > 0 :
                 val_ds[run_name] = scaler.transform(val_ds[run_name].reshape(-1, val_ds[run_name].shape[2])).reshape(-1, seq_length, val_ds[run_name].shape[2])

@@ -197,7 +197,7 @@ def collect_n_sequential_batches(
     start_idx: int,
     end_idx: int,
     sequence_length: int,
-    padding_value: Optional[int],
+    padding_value: Optional[int] = None,
 ) -> torch.Tensor:
     """
     Will take a validation file and get sequential batches

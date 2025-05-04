@@ -448,7 +448,7 @@ class RecurrentVAE(nn.Module):
         z = self.reparameterize(mu, sigma)
         return self.decode(z)
 
-class SequenceToScalarVAE(nn.Module):
+class SequenceToOneVector(nn.Module):
 
     # ADVERSARY_SOURCE = "DECODED" # For taking decoded output
     ADVERSARY_SOURCE = "LATENT" # For using latent features
@@ -462,7 +462,7 @@ class SequenceToScalarVAE(nn.Module):
         rnn_num_layers: int = 1,
         rnn_hidden_size: int = 32,
     ):
-        super(SequenceToScalarVAE, self).__init__()
+        super(SequenceToOneVector, self).__init__()
 
         # This one will have a RNN For encodeing the state data
         self.path_encoder = nn.LSTM(

@@ -1,27 +1,26 @@
 import argparse
+
 import os
 from math import ceil
-from typing import Dict, OrderedDict, Tuple
+from typing import Dict
 
+from conrecon.training_utils import simple_vae_reconstruction_training
 import debugpy
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from rich import traceback
 from rich.console import Console
+import torch
 from torch import nn
 from torch.nn import functional as F
 from tqdm import tqdm
 import wandb
-from sklearn.decomposition import PCA
 
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
-from conrecon.dplearning.adversaries import Adversary, TrivialTemporalAdversary, PCATemporalAdversary
+from conrecon.dplearning.adversaries import Adversary, TrivialTemporalAdversary
 from conrecon.dplearning.vae import SequenceToScalarVAE
 from conrecon.utils.common import create_logger, set_seeds
-from conrecon.performance_test_functions import get_tradeoff_metrics, advVae_test_file, triv_test_entire_file, pca_test_entire_file
-from conrecon.training_utils import train_vae_and_adversary_bi_level, train_vae_and_adversary
-from conrecon.utils.graphing import plot_comp, plot_signal_reconstructions
+from conrecon.performance_test_functions import get_tradeoff_metrics, advVae_test_file, nonAdvVAE_test_file, triv_test_entire_file
 
 traceback.install()
 
@@ -29,19 +28,26 @@ console = Console()
 
 wandb_on = False
 
-def argsies() -> argparse.Namespace:
+def get_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
-    # State stuff here
-    ap.add_argument(
-        "-e", "--epochs", default=30, help="How many epochs to train for", type=int
-    )
-    ap.add_argument("--adversary_epochs", default=2, help="How many epochs to train advesrary for", type=int)
-    ap.add_argument("--adv_epoch_subsample_percent", default=0.9, help="How many epochs to train advesrary for", type=int)
+
+    # Data / Misc Paths
     ap.add_argument(
         "--defacto_data_raw_path",
         default="./data/",
         type=str,
         help="Where to load the data from",
+    )
+    ap.add_argument(
+        "--path_figure_dumps", default="./figures/recon_only_vae/", type=str, help="Where to save figures"
+    )
+    ap.add_argument(
+        "--path_data_dumps", default="./results/recon_only_vae/", type=str, help="Where to save results"
+    )
+
+    # Hyperparameters
+    ap.add_argument(
+        "-e", "--epochs", default=30, help="How many epochs to train for", type=int
     )
     ap.add_argument("--batch_size", default=32, type=int)
     ap.add_argument("--rnn_num_layers", default=2, type=int)
@@ -62,9 +68,25 @@ def argsies() -> argparse.Namespace:
     )
     # ap.add_argument("--kl_dig_hypr", "-k", default=0.001, type=float)
     ap.add_argument("--kl_dig_hypr", "-k", default=0.9674820321116988, type=float)
-
     ap.add_argument("--seed", default=0, type=int)
     ap.add_argument("--lr", default=0.001, type=float)
+
+    # Data Processing
+    ap.add_argument(
+        "--oversample_coefficient",
+        default=1.6,
+        type=float,
+        help="The threshold for retaining principal components",
+    )
+    ap.add_argument(
+        "--test_file_name",
+        type=str,
+        default="run_5.csv",
+        help="the one file that will be picked from the rest to test against."
+    )
+
+    # Misc. Logistics
+    ap.add_argument("--validation_frequency", default=1, help="Evaluation Frequency in terms of batches")
 
     ap.add_argument(
         "--debug",
@@ -79,29 +101,12 @@ def argsies() -> argparse.Namespace:
         help="Port to attach debugpy to listen to.",
     )
     ap.add_argument(
-        "--shuffle",
-        action="store_false",
-        help="Whether or not to shuffle the data",
-    )
-    ap.add_argument(
-        "--wandb",
+        "--wandb_on",
         "-w",
         action="store_true",
         help="Whether or not to use wandb for logging",
     )
-    ap.add_argument(
-        "--priv_utility_tradeoff_coeff",
-        default=0.7532759360973336,
-        # default=4,
-        type=float,
-        help="The threshold for retaining principal components",
-    )
-    ap.add_argument(
-        "--oversample_coefficient",
-        default=1.6,
-        type=float,
-        help="The threshold for retaining principal components",
-    )
+
 
     args = ap.parse_args()
 
@@ -109,12 +114,6 @@ def argsies() -> argparse.Namespace:
         os.makedirs(".cache/")
     return args
     # Sanity check
-
-def compare_reconstruction():
-    """
-    Will take the original set of features and
-    """
-    raise NotImplementedError
 
 def plot_training_losses(recon_losses: list, adv_losses: list, fig_savedest: str):
     os.makedirs(os.path.dirname(fig_savedest), exist_ok=True)
@@ -243,29 +242,38 @@ def baseline_trivial_correlation(
 
 
 def main():
-    args = argsies()
+    args = get_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     set_seeds(args.seed)
     logger = create_logger("main_training")
 
-    if args.wandb:
-        wandb.init(project="private_control", config=args)
+    if args.wandb_on:
+        wandb.init(project="private_control_pure_vae", config=vars(args))
 
     if args.debug:
         logger.info("\033[1;33m Waiting for debugger to attach...\033[0m")
         debugpy.listen(("0.0.0.0", args.debug_port))
         debugpy.wait_for_client()
 
-    columns, runs_dict, debug_file = load_defacto_data(args.defacto_data_raw_path)
+    ########################################
+    # Data Loading
+    ########################################
+    # Get a dictionary where each key is a run/file and each value is the data for that run
+    runs_dict, columns = load_defacto_data(args.defacto_data_raw_path)
+
+    # DEBUG: remove this afterwards
+    file_names = "\n".join([f"\t-{file_name}" for file_name in runs_dict.keys()])
+    print(f"Show me all files being used:\n {file_names}")
 
     # Separate them into their splits (and also interpolate)
     train_seqs, val_seqs, test_file = split_defacto_runs(
-        runs_dict,
-        args.splits["train_split"],
-        args.splits["val_split"],
-        args.episode_length,
-        args.oversample_coefficient,
-        True, # Scale
+        run_dict = runs_dict,
+        train_split = args.splits["train_split"],
+        test_file_name = args.test_file_name,
+        val_split = args.splits["val_split"],
+        seq_length = args.episode_length,
+        oversample_coefficient = args.oversample_coefficient, # Scale
+        scale = True
     )
 
     logger.info(f"Using device is {device}")
@@ -284,6 +292,7 @@ def main():
     non_0_idxs = [0,3,4,5,6,7,8,9,10,11,12,13,14,15]
     test_file = test_file[:,non_0_idxs]
     all_train_seqs = all_train_seqs[:,:,non_0_idxs]
+    all_valid_seqs = all_valid_seqs[:,:,non_0_idxs]
     
     # Shuffle, Batch, Torch Coversion, Feature Separation
     np.random.shuffle(all_train_seqs)
@@ -311,50 +320,46 @@ def main():
         rnn_hidden_size=args.rnn_hidden_size,
     ).to(device)
 
-    model_adversary = Adversary(
-        input_size=args.vae_latent_size,
-        hidden_size=args.vae_hidden_size,
-        num_classes=num_private_cols,
-    ).to(device)
-
-    # Configuring Optimizers
-    opt_adversary = torch.optim.Adam(model_adversary.parameters(), lr=args.lr)  # type: ignore
-    opt_vae = torch.optim.Adam(model_vae.parameters(), lr=args.lr)  # type: ignore
-
-
     ########################################
     # Training VAE and Adversary
     ########################################
     logger.info("Starting the VAE Training")
-    model_vae, model_adversary, recon_losses, adv_losses = train_vae_and_adversary_bi_level(
-        args.batch_size,
-        args.cols_to_hide,
-        all_train_seqs,
-        all_valid_seqs,
-        None, # TOREM: THis is for making it faster fow now
-        args.epochs,
-        args.adversary_epochs,
-        args.adv_epoch_subsample_percent,
-        model_vae,
-        model_adversary,
-        opt_vae,
-        opt_adversary,
-        args.kl_dig_hypr,
-        args.wandb,
-        args.priv_utility_tradeoff_coeff,
+
+    # Get the optimziers
+    opt_vae = torch.optim.Adam(model_vae.parameters(), lr=args.lr)  # type: ignore
+
+    model_vae, recon_losses = simple_vae_reconstruction_training(
+        batch_size = args.batch_size,
+        priv_columns = args.cols_to_hide,
+        all_train_seqs = all_train_seqs,
+        all_validation_seqs = all_valid_seqs,
+        epochs = args.epochs,
+        model_vae = model_vae,
+        optimizer_vae = opt_vae,
+        kl_dig_hypr = args.kl_dig_hypr,
+        wandb_on = args.wandb_on,
+        validate_every_n_batches=args.validation_frequency
     )
-    plot_training_losses(recon_losses, adv_losses, f"./figures/new_data_vae/recon-adv_losses.png")
-    metrics = advVae_test_file(
+
+    metrics = nonAdvVAE_test_file(
         test_file,
         args.cols_to_hide,
         model_vae,
-        model_adversary,
         args.episode_length,
-        # args.padding_value,
-        None, # WE NO LONGER USE padding_value
-        args.batch_size,
-        wandb_on=args.wandb
+        args.dump_path_data_results,
+        args.path_figure_dumps,
+        args.path_data_dumps,
     )
+
+    ########################################
+    # Finally, we do visual Validation
+    ########################################
+
+    # TODO: PLot recon losses
+    if wandb_on:
+        wandb.log({
+            "recon_losses":  recon_losses
+        })
     logger.info(f"Validation Metrics are {metrics}")
 
     ########################################
@@ -383,16 +388,16 @@ def main():
         wandb_on=args.wandb
     )
     # Need to see this
-    privacy, utility = get_tradeoff_metrics(
-        test_file,
-        args.cols_to_hide,
-        model_vae,
-        model_adversary,
-        args.episode_length,
-        # args.padding_value, # WE NO LONGER USE padding_value
-        None,
-        args.batch_size,
-    )
+    # privacy, utility = get_tradeoff_metrics(
+    #     test_file,
+    #     args.cols_to_hide,
+    #     model_vae,
+    #     model_adversary,
+    #     args.episode_length,
+    #     # args.padding_value, # WE NO LONGER USE padding_value
+    #     None,
+    #     args.batch_size,
+    # )
     logger.info(f"Final Validation Metrics are privacy: {privacy}, privacy: {utility}")
 
 

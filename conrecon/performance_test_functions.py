@@ -6,6 +6,7 @@ import logging
 from matplotlib.axes import Axes
 import numpy as np
 import torch
+from torch.nn import functional as F
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import wandb
@@ -217,6 +218,99 @@ def pca_test_entire_file(
 
     return {k: np.mean(v).item() for k, v in metrics.items()}, utility, privacy
 
+def nonAdvVAE_test_file(
+    test_file: np.ndarray,
+    idxs_colsToGuess: Sequence[int],
+    model_vae: nn.Module,
+    sequence_length: int,
+    dump_path_data_results: str,
+    dump_path_figures: str,
+    batch_size: int = 16,
+) -> Dict[str, float]:
+    """
+    Will run a visualized test iteration for the passed model
+    Args:
+        - validation_file: Validation data (file_length, num_features)
+        - model: Model to run the validation on
+        - col_to_predict: (0-index) which column we would like to predict
+    """
+    metrics = {}
+    all_dirs = [ dump_path_data_results, dump_path_figures ]
+    for dir in all_dirs:
+        dirname = os.path.dirname(dir)
+        os.makedirs(dirname, exist_ok=True)
+
+    model_vae.eval()
+    model_device = next(model_vae.parameters()).device
+    test_x = torch.from_numpy(test_file).to(torch.float32).to(model_device)
+
+    # Generate the reconstruction
+    num_batches = ceil(
+        (len(test_x) - sequence_length) / batch_size
+    )  ## Subtract sequence_length to avoid padding
+    evaluation_initial_offset = sequence_length - 1
+
+    batch_sanitized = []
+    latent_zs = []
+    with torch.no_grad():
+        for batch_no in range(num_batches):
+            ########################################
+            # Sanitize the data
+            ########################################
+            start_idx = (
+                batch_no * batch_size + evaluation_initial_offset
+            )  #  Sequence length to avoid padding
+            end_idx = min((batch_no + 1) * batch_size + evaluation_initial_offset, test_x.shape[0])
+            backhistory = collect_n_sequential_batches(
+                test_x, start_idx, end_idx, sequence_length
+            )
+            latent_z, sanitized_data, kl_divergence = model_vae(backhistory)
+
+            # TODO: Incorporate Adversary Guess
+            batch_sanitized.append(sanitized_data)
+            latent_zs.append(latent_z)
+
+    ########################################
+    # Dump data to play with it later.
+    ########################################
+    seq_sanitized = torch.cat(batch_sanitized, dim=0)
+    seq_latent_zs = torch.cat(latent_zs, dim=0)
+
+    tosave_val_x = test_x.cpu().numpy()
+
+    tosave_sanitized = seq_sanitized.cpu().numpy()
+    tosave_latent_zs = seq_latent_zs.cpu().numpy()
+    os.makedirs("./results/", exist_ok=True)
+    np.save(os.path.join(dump_path_data_results,f"val_x_{idxs_colsToGuess}.npy"), tosave_val_x)
+    np.save(os.path.join(dump_path_data_results,f"sanitized_x_{idxs_colsToGuess}.npy"), tosave_sanitized)
+    np.save(os.path.join(dump_path_data_results,f"latent_z_{idxs_colsToGuess}.npy"), tosave_latent_zs)
+
+    ########################################
+    # Chart For Reconstruction
+    ########################################
+
+    recon_to_show = seq_sanitized
+    truth_to_compare = torch.from_numpy(test_file[evaluation_initial_offset:])
+    pub_features_idxs = list(set(range(test_file.shape[-1])) - set(idxs_colsToGuess))
+    path_to_save_fig = os.path.join(dump_path_figures, "vae_pure_recon.png")
+    assert (
+        truth_to_compare.shape == recon_to_show.shape
+    ), f"Shape mismatch: truth_to_compare.shape is {truth_to_compare.shape} and recon_to_show.shape is {recon_to_show.shape}"
+
+    metrics["recon_loss"] = F.mse_loss(truth_to_compare, recon_to_show).item()
+
+
+    plot_comp(
+        truth_to_compare,
+        recon_to_show.cpu(),
+        pub_features_idxs,
+        path_to_save_fig
+    )
+
+    
+    model_vae.train()
+
+    return metrics
 
 def advVae_test_file(
     test_file: np.ndarray,
@@ -241,11 +335,14 @@ def advVae_test_file(
         "recon_loss": [],
         "adv_loss": [],
     }
+    recon_base_dir = os.path.basename(recon_savefig_loc)
+    adv_base_dir = os.path.basename(adv_savefig_loc)
     os.makedirs("./results/model_vae/", exist_ok=True)
     os.makedirs("./figures/model_vae/", exist_ok=True)
 
     model_vae.eval()
     model_adversary.eval()
+    device = next(model_vae.parameters()).device
 
     model_device = next(model_vae.parameters()).device
     test_x = torch.from_numpy(test_file).to(torch.float32).to(model_device)
@@ -256,6 +353,7 @@ def advVae_test_file(
     num_batches = ceil(
         (len(test_x) - sequence_length) / batch_size
     )  ## Subtract sequence_length to avoid padding
+    evaluation_initial_offset = sequence_length - 1
 
     batch_guesses = []
     batch_sanitized = []
@@ -266,9 +364,10 @@ def advVae_test_file(
             # Sanitize the data
             ########################################
             start_idx = (
-                batch_no * batch_size + sequence_length
+                # This TESTFILE looks super sus. Why would we multiply batch_no y batch_size
+                batch_no * batch_size + evaluation_initial_offset
             )  #  Sequence length to avoid padding
-            end_idx = min((batch_no + 1) * batch_size + sequence_length, test_x.shape[0])
+            end_idx = min((batch_no + 1) * batch_size + evaluation_initial_offset, test_x.shape[0] - 1)
             backhistory = collect_n_sequential_batches(
                 test_x, start_idx, end_idx, sequence_length, padding_value
             )
@@ -303,8 +402,11 @@ def advVae_test_file(
     ########################################
 
     recon_to_show = seq_sanitized
-    truth_to_compare = test_file
+    truth_to_compare = test_file[evaluation_initial_offset:]
     pub_features_idxs = list(set(range(test_file.shape[-1])) - set(idxs_colsToGuess))
+    assert (
+        truth_to_compare.shape == recon_to_show.shape
+    ), f"Shape mismatch: truth_to_compare.shape is {truth_to_compare.shape} and recon_to_show.shape is {recon_to_show.shape}"
     plot_comp(
         truth_to_compare,
         recon_to_show.cpu(),
@@ -320,6 +422,7 @@ def advVae_test_file(
         adv_to_show,
         f"figures/method_vae/vae_adversary",
     )
+
 
     # # Lets now save the figure
     # permd_sanitized_idxs = torch.randperm(len(public_columns))[:8]
