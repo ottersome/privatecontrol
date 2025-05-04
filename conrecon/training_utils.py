@@ -1,6 +1,7 @@
 import os
 import time
 import torch
+import debugpy
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
@@ -11,6 +12,7 @@ import logging
 from math import ceil, exp
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.adversaries import (
@@ -181,22 +183,21 @@ def train_adversary(
     epochs: int,
     epoch_sample_percent: float,
     global_samples: torch.Tensor,
-    num_cols: int,
     prv_cols: List[int],
     batch_size: int,
 ) -> nn.Module:
-    pub_cols = list(set(range(num_cols)) - set(prv_cols))
 
     model_vae.eval()
     num_subsamples = min(ceil(epoch_sample_percent * global_samples.shape[0]), global_samples.shape[0])
     # TODO: test this out
     device = next(model_vae.parameters()).device
-    num_batches = global_samples.shape[0] 
+    num_batches = ceil(global_samples.shape[0] / batch_size)
 
+    debug_losses = []
     for e in range(epochs):
         random_indices = torch.randperm(global_samples.shape[0])[:num_subsamples].to(device)
         subsamples = torch.index_select(global_samples, 0, random_indices)
-        train_prv = subsamples[:, :, prv_cols]
+        y_priv = subsamples[:, -1, prv_cols]
 
         for batch_no in range(num_batches):
             ########################################
@@ -205,24 +206,37 @@ def train_adversary(
             batch_all = subsamples[
                 batch_no * batch_size : (batch_no + 1) * batch_size
             ]
-            batch_prv = train_prv[batch_no * batch_size : (batch_no + 1) * batch_size]
-            batch_privTrue_flat = (
-                batch_prv[:, -1, :].view(-1, batch_prv.shape[-1]).flatten()
-            )  # Grab only last in sequeence
+            batch_prv = y_priv[batch_no * batch_size : (batch_no + 1) * batch_size]
+            batch_privTrue_flat = ( batch_prv.view(-1, batch_prv.shape[-1]).flatten())  
+            logger.debug(f"batch_privTrue_flat.is_nan? = {torch.isnan(batch_privTrue_flat).any()}")
             # WARNING: Check on that -1 seems sus.
             with torch.no_grad():
-                 latent_z, sanitized_data, _ = model_vae(batch_all[:,:-1,:]) # Do not leak the last element of sequence
-            adversary_guess_flat = model_adversary(latent_z)
+                latent_z, sanitized_data, _ = model_vae(batch_all[:,:-1,:]) # Do not leak the last element of sequence
+            logger.debug(f"latent_z.is_nan? = {torch.isnan(latent_z).any()}")
+            adversary_guess_flat = model_adversary(latent_z).flatten()
+            logger.debug(f"adversary_guess_flat.is_nan? = {torch.isnan(adversary_guess_flat).any()}")
             # WARNING: Check on that -1 seems sus.
-            batch_privTrue_flat = batch_prv[:, -1, :].view(-1, batch_prv.shape[-1])
 
             ########################################
             # Gradient Calculation
             ########################################
             adv_train_loss = F.mse_loss(adversary_guess_flat, batch_privTrue_flat)
+            logger.debug(f"adversary_guess_flat.is_nan? = {torch.isnan(adversary_guess_flat).any()}")
+            logger.debug(f"adv_train_loss.is_nan? = {torch.isnan(adv_train_loss).any()}")
+            if torch.isnan(adv_train_loss).any():
+                debugpy.breakpoint()
+            logger.debug(f"---------------------")
+            debug_losses.append(adv_train_loss.item()) 
             model_adversary.zero_grad()
             adv_train_loss.backward()
             opt_adversary.step()
+
+    # Temporal Figure making for debug
+    plt.plot(debug_losses)
+    logger.debug(f"Plotting the adversary losses")
+    logger.debug(f"Adversary Losses are {debug_losses}")
+    plt.savefig(f"./figures/method_vae/inner_adv_losses.png")
+    plt.close()
 
     model_vae.train()
     return model_adversary
@@ -303,7 +317,7 @@ def simple_vae_reconstruction_training(
 
 def train_vae_and_adversary_bi_level(
     batch_size: int,
-    priv_columns: list[int], # Mostly so we know what to ignore.
+    prv_columns: list[int], # Mostly so we know what to ignore.
     all_train_seqs: torch.Tensor,
     all_validation_seqs: torch.Tensor,
     epochs: int,
@@ -315,18 +329,19 @@ def train_vae_and_adversary_bi_level(
     optimizer_adv: torch.optim.Optimizer, # type:ignore
     kl_dig_hypr: float, 
     wandb_on: bool, 
+    priv_utility_tradeoff_coeff: float,
     validate_every_n_batches: Optional[int] = None,
-) -> tuple[nn.Module, list[float]]:
+) -> tuple[nn.Module, nn.Module, list[float]]:
     """
     The point of this funciton is to be able to test the VAE model independent of the adversary.
     So that we can focus on getting the best performance out of reconstruction
     """
     # Some Helper Variables
-    pub_columns = list(set(range(all_train_seqs.shape[-1])) - set(priv_columns))
+    pub_columns = list(set(range(all_train_seqs.shape[-1])) - set(prv_columns))
 
     num_seqs_as_samples = all_train_seqs.shape[0]
     recon_losses = []
-    for e in tqdm(range(epochs), desc="Epochs"):
+    for e in tqdm(range(epochs), desc="Training Vae-Adv Epochs"):
         batch_steps = np.arange(0, num_seqs_as_samples, batch_size)
         recon_losses = []
         for _batch_offset in batch_steps:
@@ -336,6 +351,7 @@ def train_vae_and_adversary_bi_level(
             batch_end = min(_batch_offset + batch_size, num_seqs_as_samples)
             batch_all = all_train_seqs[_batch_offset: batch_end, :, :]
             batch_pub = all_train_seqs[_batch_offset: batch_end, :, pub_columns]
+            batch_prv = all_train_seqs[_batch_offset: batch_end, :, prv_columns]
 
             ########################################
             # Adversarial Training must take place first.
@@ -347,8 +363,7 @@ def train_vae_and_adversary_bi_level(
                 epochs=adv_train_subepochs,
                 epoch_sample_percent=adv_epoch_subsample_percent,
                 global_samples=all_train_seqs,
-                num_cols=batch_all.shape[-1],
-                prv_cols=priv_columns,
+                prv_cols=prv_columns,
                 batch_size = batch_size # Share batch_size
             )
 
@@ -356,18 +371,25 @@ def train_vae_and_adversary_bi_level(
             # Actual Training
             ########################################
             # Now we train the autoencoder to try to fool the adversary
-            _, sanitized_data, kl_divergence = model_vae(batch_all[:,:-1,:]) # Do not leak the last element of sequence
+            latent_z, sanitized_data, kl_divergence = model_vae(batch_all[:,:-1,:]) # Do not leak the last element of sequence
 
+            # Sneaky adversary comes here and reads the latent data
+            model_adversary.freeze()
+            adversary_guess = model_adversary(latent_z)
+
+            adv_train_loss = F.mse_loss(adversary_guess, batch_prv[:, -1, :])
             # Check on performance
             pub_recon_loss = F.mse_loss(sanitized_data, batch_pub[:, -1, :], reduction="none").mean(-1) # Guesss the set of features of sequence
             # pub_recon_norm = pub_recon_loss / (pub_recon_loss.detach() + 1e-8) TEST: Just trying normaliztion
             final_loss_scalar = (
-                pub_recon_loss + kl_dig_hypr * kl_divergence # Just good ol reconstruciton to see if it works
+                pub_recon_loss - priv_utility_tradeoff_coeff * adv_train_loss + kl_dig_hypr * kl_divergence # Just good ol reconstruciton to see if it works
+                # pub_recon_loss + kl_dig_hypr * kl_divergence # Just good ol reconstruciton to see if it works
             ).mean()
 
             optimizer_vae.zero_grad()
             final_loss_scalar.backward()
             optimizer_vae.step()
+            model_adversary.unfreeze()
 
             if wandb_on: 
                 wandb.log({
@@ -392,7 +414,7 @@ def train_vae_and_adversary_bi_level(
 
             recon_losses.append(pub_recon_loss.mean().item())
 
-    return model_vae, recon_losses
+    return model_vae, model_adversary, recon_losses
 
 @deprecated("Not entirely sure it works",date="2025-05-04 10:18")
 def train_vae_and_adversary_bi_level_deprecated(

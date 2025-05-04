@@ -16,6 +16,12 @@ class Adversary(torch.nn.Module):
         x = torch.relu(self.fc2(x))
         x = self.fc3(x)
         return x
+    def freeze(self):
+        for param in self.parameters():
+            param.requires_grad = False
+    def unfreeze(self):
+        for param in self.parameters():
+            param.requires_grad = True
 
 class TrivialTemporalAdversary(torch.nn.Module):
     def __init__(

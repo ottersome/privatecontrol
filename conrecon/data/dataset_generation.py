@@ -233,7 +233,7 @@ def spot_backhistory(
         spot: where the sampling will start from.
         sequence_len:  includes `spot` as part of the sequence length
     """
-    sequence_so_far = run[: spot + 1, :]  # Inclusive
+    sequence_so_far = run[: spot, :]
     sequence_so_far = sequence_so_far[-sequence_len:, :]
     if (spot - sequence_len + 1) < 0:
         raise RuntimeError("Spot is too far back. We are disabling this feature for now")

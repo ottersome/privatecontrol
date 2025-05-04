@@ -319,11 +319,10 @@ def advVae_test_file(
     model_vae: nn.Module,
     model_adversary: nn.Module,
     sequence_length: int,
-    padding_value: Optional[int],
     batch_size: int = 16,
     wandb_on: bool = False,
-    recon_savefig_loc: str = "./figures/model_vae/vae_reconstruction.png",
-    adv_savefig_loc: str = "./figures/model_vae/vae_adversary.png",
+    recon_savefig_loc: str = "./figures/method_vae/vae_reconstruction.png",
+    adv_savefig_loc: str = "./figures/method_vae/vae_adversary.png",
 ) -> Dict[str, float]:
     """
     Will run a validation iteration for a model
@@ -354,7 +353,7 @@ def advVae_test_file(
     num_batches = ceil(
         (len(test_x) - sequence_length) / batch_size
     )  ## Subtract sequence_length to avoid padding
-    evaluation_initial_offset = sequence_length - 1
+    evaluation_initial_offset = sequence_length
 
     batch_guesses = []
     batch_sanitized = []
@@ -368,11 +367,11 @@ def advVae_test_file(
                 # This TESTFILE looks super sus. Why would we multiply batch_no y batch_size
                 batch_no * batch_size + evaluation_initial_offset
             )  #  Sequence length to avoid padding
-            end_idx = min((batch_no + 1) * batch_size + evaluation_initial_offset, test_x.shape[0] - 1)
+            end_idx = min((batch_no + 1) * batch_size + evaluation_initial_offset, test_x.shape[0])
             backhistory = collect_n_sequential_batches(
-                test_x, start_idx, end_idx, sequence_length, padding_value
+                test_x, start_idx, end_idx, sequence_length
             )
-            latent_z, sanitized_data, kl_divergence = model_vae(backhistory)
+            latent_z, sanitized_data, kl_divergence = model_vae(backhistory[:,:-1,:])
 
             # TODO: Incorporate Adversary Guess
             adversary_guess = model_adversary(latent_z)
@@ -406,13 +405,13 @@ def advVae_test_file(
     truth_to_compare = test_file[evaluation_initial_offset:]
     pub_features_idxs = list(set(range(test_file.shape[-1])) - set(idxs_colsToGuess))
     assert (
-        truth_to_compare.shape == recon_to_show.shape
+        truth_to_compare.shape[0] == recon_to_show.shape[0]
     ), f"Shape mismatch: truth_to_compare.shape is {truth_to_compare.shape} and recon_to_show.shape is {recon_to_show.shape}"
     plot_comp(
         truth_to_compare,
         recon_to_show.cpu(),
         pub_features_idxs,
-        f"figures/method_vae/vae_reconstruction.png",
+        recon_savefig_loc,
     )
 
 
@@ -421,7 +420,7 @@ def advVae_test_file(
     plot_signal_reconstructions(
         adv_truth,
         adv_to_show,
-        f"figures/method_vae/vae_adversary",
+        adv_savefig_loc
     )
 
 

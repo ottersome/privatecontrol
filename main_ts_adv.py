@@ -18,9 +18,10 @@ from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.adversaries import Adversary, TrivialTemporalAdversary
 from conrecon.dplearning.vae import SequenceToOneVectorGeneral
 from conrecon.performance_test_functions import (
-    nonAdvVAE_test_file,
+    advVae_test_file,
 )
 from conrecon.training_utils import (
+    train_adversary,
     train_vae_and_adversary_bi_level,
 )
 from conrecon.utils.common import create_logger, set_seeds
@@ -100,10 +101,24 @@ def get_args() -> argparse.Namespace:
         type=int,
     )
     ap.add_argument(
+        "--clean_adversary_epochs",
+        default=20,
+        help="How many epochs to train advesrary for",
+        type=int,
+    )
+    ap.add_argument(
         "--adv_epoch_subsample_percent",
         default=1,
         help="How many epochs to train advesrary for",
         type=int,
+    )
+    ap.add_argument(
+        "-c",
+        "--priv_utility_tradeoff_coeff",
+        default=2,
+        # default=4,
+        type=float,
+        help="The threshold for retaining principal components",
     )
     # ap.add_argument("--kl_dig_hypr", "-k", default=0.001, type=float)
     ap.add_argument("--kl_dig_hypr", "-k", default=0.0009674820321116988, type=float)
@@ -388,9 +403,9 @@ def main():
     opt_vae = torch.optim.Adam(model_vae.parameters(), lr=args.vae_lr)  # type: ignore
     opt_adv = torch.optim.Adam(model_adversary.parameters(), lr=args.adv_lr) # type:ignore
 
-    model_vae, recon_losses = train_vae_and_adversary_bi_level(
+    model_vae, model_adversary, recon_losses = train_vae_and_adversary_bi_level(
         batch_size=args.batch_size,
-        priv_columns=args.cols_to_hide,
+        prv_columns=args.cols_to_hide,
         all_train_seqs=all_train_seqs,
         all_validation_seqs=all_valid_seqs,
         epochs=args.epochs,
@@ -402,17 +417,35 @@ def main():
         optimizer_adv=opt_adv,
         kl_dig_hypr=args.kl_dig_hypr,
         wandb_on=args.wandb_on,
+        priv_utility_tradeoff_coeff=args.priv_utility_tradeoff_coeff,
         validate_every_n_batches=args.validation_frequency,
     )
 
-    metrics = nonAdvVAE_test_file(
+    logger.info("Running a final clean training of the adversary...")
+    clean_model_adversary = Adversary(
+        input_size=args.vae_latent_output_size,
+        hidden_size=args.vae_hidden_size,
+        num_classes=num_private_cols,
+    ).to(device)
+    clean_opt_adv  = torch.optim.Adam(clean_model_adversary.parameters(), lr=args.adv_lr) # type:ignore
+    train_adversary(
+        model_vae,
+        clean_model_adversary,
+        clean_opt_adv,
+        args.clean_adversary_epochs,
+        1,
+        all_train_seqs,
+        args.cols_to_hide,
+        args.batch_size,
+    )
+    metrics = advVae_test_file(
         test_file,
         args.cols_to_hide,
         model_vae,
+        clean_model_adversary,
         args.episode_length,
-        args.path_data_dumps,
-        args.path_figure_dumps,
         batch_size=args.batch_size,
+        wandb_on=args.wandb_on,
     )
 
     ########################################
