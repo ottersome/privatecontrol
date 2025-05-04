@@ -304,7 +304,7 @@ def nonAdvVAE_test_file(
     plot_comp(
         truth_to_compare.cpu(),
         recon_to_show.cpu(),
-        idxs_ignoredCols,
+        public_cols,
         path_to_save_fig
     )
 

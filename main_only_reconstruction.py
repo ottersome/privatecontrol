@@ -70,7 +70,7 @@ def get_args() -> argparse.Namespace:
     ap.add_argument("--transformer_num_layers", default=3, type=int, help="Number of Tranfomer Layers")
     ap.add_argument("--transformer_dropout", default=0.1, type=float, help="Dropout for transformer")
     # ap.add_argument("--kl_dig_hypr", "-k", default=0.001, type=float)
-    ap.add_argument("--kl_dig_hypr", "-k", default=0.9674820321116988, type=float)
+    ap.add_argument("--kl_dig_hypr", "-k", default=0.0009674820321116988, type=float)
     ap.add_argument("--seed", default=0, type=int)
     ap.add_argument("--lr", default=0.001, type=float)
 
