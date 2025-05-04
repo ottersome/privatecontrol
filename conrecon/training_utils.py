@@ -20,7 +20,7 @@ from conrecon.dplearning.adversaries import (
 )
 from conrecon.dplearning.vae import SequenceToOneVectorSimple, SequenceToOneVectorGeneral
 from conrecon.plotting import TrainLayout
-from conrecon.utils.common import create_logger
+from conrecon.utils.common import create_logger, deprecated
 from conrecon.validation_functions import calculate_validation_metrics
 from conrecon.performance_test_functions import (
     advVae_test_file,
@@ -301,8 +301,101 @@ def simple_vae_reconstruction_training(
 
     return model_vae, recon_losses
 
-
 def train_vae_and_adversary_bi_level(
+    batch_size: int,
+    priv_columns: list[int], # Mostly so we know what to ignore.
+    all_train_seqs: torch.Tensor,
+    all_validation_seqs: torch.Tensor,
+    epochs: int,
+    model_vae: nn.Module,
+    model_adversary: nn.Module,
+    adv_train_subepochs: int,
+    adv_epoch_subsample_percent: float,
+    optimizer_vae: torch.optim.Optimizer, # type: ignore
+    optimizer_adv: torch.optim.Optimizer, # type:ignore
+    kl_dig_hypr: float, 
+    wandb_on: bool, 
+    validate_every_n_batches: Optional[int] = None,
+) -> tuple[nn.Module, list[float]]:
+    """
+    The point of this funciton is to be able to test the VAE model independent of the adversary.
+    So that we can focus on getting the best performance out of reconstruction
+    """
+    # Some Helper Variables
+    pub_columns = list(set(range(all_train_seqs.shape[-1])) - set(priv_columns))
+
+    num_seqs_as_samples = all_train_seqs.shape[0]
+    recon_losses = []
+    for e in tqdm(range(epochs), desc="Epochs"):
+        batch_steps = np.arange(0, num_seqs_as_samples, batch_size)
+        recon_losses = []
+        for _batch_offset in batch_steps:
+            ########################################
+            # Data Collection
+            ########################################
+            batch_end = min(_batch_offset + batch_size, num_seqs_as_samples)
+            batch_all = all_train_seqs[_batch_offset: batch_end, :, :]
+            batch_pub = all_train_seqs[_batch_offset: batch_end, :, pub_columns]
+
+            ########################################
+            # Adversarial Training must take place first.
+            ########################################
+            model_aversary = train_adversary(
+                model_vae=model_vae, 
+                model_adversary=model_adversary,
+                opt_adversary=optimizer_adv,
+                epochs=adv_train_subepochs,
+                epoch_sample_percent=adv_epoch_subsample_percent,
+                global_samples=all_train_seqs,
+                num_cols=batch_all.shape[-1],
+                prv_cols=priv_columns,
+                batch_size = batch_size # Share batch_size
+            )
+
+            ########################################
+            # Actual Training
+            ########################################
+            # Now we train the autoencoder to try to fool the adversary
+            _, sanitized_data, kl_divergence = model_vae(batch_all[:,:-1,:]) # Do not leak the last element of sequence
+
+            # Check on performance
+            pub_recon_loss = F.mse_loss(sanitized_data, batch_pub[:, -1, :], reduction="none").mean(-1) # Guesss the set of features of sequence
+            # pub_recon_norm = pub_recon_loss / (pub_recon_loss.detach() + 1e-8) TEST: Just trying normaliztion
+            final_loss_scalar = (
+                pub_recon_loss + kl_dig_hypr * kl_divergence # Just good ol reconstruciton to see if it works
+            ).mean()
+
+            optimizer_vae.zero_grad()
+            final_loss_scalar.backward()
+            optimizer_vae.step()
+
+            if wandb_on: 
+                wandb.log({
+                    "pub_recon_loss": pub_recon_loss
+                })
+            # Validalidation Steps
+            we_should_do_validation_iteration = isinstance(validate_every_n_batches, int) and validate_every_n_batches > 0
+            if we_should_do_validation_iteration: 
+                # TODO: We need to finish this
+                validation_score = validate_vae_recon(
+                    model_vae = model_vae,
+                    all_valid_seqs = all_validation_seqs,
+                    validation_batch_size = batch_size,
+                    pub_columns =pub_columns
+                )
+                if wandb_on:
+                    wandb.log({
+                        "validation_score" : validation_score
+                    })
+            else: 
+                raise RuntimeError("Expected a positive integer for the time interval for validation.")
+
+            recon_losses.append(pub_recon_loss.mean().item())
+
+    return model_vae, recon_losses
+
+@deprecated("Not entirely sure it works",date="2025-05-04 10:18")
+def train_vae_and_adversary_bi_level_deprecated(
     batch_size: int,
     priv_columns: List[int],
     all_train_seqs: torch.Tensor,

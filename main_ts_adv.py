@@ -1,32 +1,36 @@
 import argparse
-
 import os
 from math import ceil
 from typing import Dict
 
-from conrecon.training_utils import simple_vae_reconstruction_training
 import debugpy
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from rich import traceback
 from rich.console import Console
-import torch
 from torch import nn
 from torch.nn import functional as F
 from tqdm import tqdm
-import wandb
 
+import wandb
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.adversaries import Adversary, TrivialTemporalAdversary
 from conrecon.dplearning.vae import SequenceToOneVectorGeneral
+from conrecon.performance_test_functions import (
+    nonAdvVAE_test_file,
+)
+from conrecon.training_utils import (
+    train_vae_and_adversary_bi_level,
+)
 from conrecon.utils.common import create_logger, set_seeds
-from conrecon.performance_test_functions import get_tradeoff_metrics, advVae_test_file, nonAdvVAE_test_file, triv_test_entire_file
 
 traceback.install()
 
 console = Console()
 
 wandb_on = False
+
 
 def get_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
@@ -39,10 +43,16 @@ def get_args() -> argparse.Namespace:
         help="Where to load the data from",
     )
     ap.add_argument(
-        "--path_figure_dumps", default="./figures/recon_only_vae/", type=str, help="Where to save figures"
+        "--path_figure_dumps",
+        default="./figures/recon_only_vae/",
+        type=str,
+        help="Where to save figures",
     )
     ap.add_argument(
-        "--path_data_dumps", default="./results/recon_only_vae/", type=str, help="Where to save results"
+        "--path_data_dumps",
+        default="./results/recon_only_vae/",
+        type=str,
+        help="Where to save results",
     )
 
     # Hyperparameters
@@ -54,7 +64,9 @@ def get_args() -> argparse.Namespace:
     ap.add_argument("--rnn_hidden_size", default=64, type=int)
     ap.add_argument(
         "--cols_to_hide",
-        default=[5-2],#NOTE: When you work with this code, keep in mind this hardcoded displacement for the private column
+        default=[
+            5 - 2
+        ],  # NOTE: When you work with this code, keep in mind this hardcoded displacement for the private column
         help="Which are the columsn we want no information of",
     )  # Remember 0-index (so 5th)
     ap.add_argument("--vae_latent_output_size", default=64, type=int)
@@ -66,13 +78,38 @@ def get_args() -> argparse.Namespace:
         type=list,
         nargs="+",
     )
-    ap.add_argument("--transformer_num_heads", default=3, type=int, help="Number of Transformer Heads")
-    ap.add_argument("--transformer_num_layers", default=3, type=int, help="Number of Tranfomer Layers")
-    ap.add_argument("--transformer_dropout", default=0.1, type=float, help="Dropout for transformer")
+    ap.add_argument(
+        "--transformer_num_heads",
+        default=3,
+        type=int,
+        help="Number of Transformer Heads",
+    )
+    ap.add_argument(
+        "--transformer_num_layers",
+        default=3,
+        type=int,
+        help="Number of Tranfomer Layers",
+    )
+    ap.add_argument(
+        "--transformer_dropout", default=0.1, type=float, help="Dropout for transformer"
+    )
+    ap.add_argument(
+        "--adversary_epochs",
+        default=2,
+        help="How many epochs to train advesrary for",
+        type=int,
+    )
+    ap.add_argument(
+        "--adv_epoch_subsample_percent",
+        default=1,
+        help="How many epochs to train advesrary for",
+        type=int,
+    )
     # ap.add_argument("--kl_dig_hypr", "-k", default=0.001, type=float)
     ap.add_argument("--kl_dig_hypr", "-k", default=0.0009674820321116988, type=float)
     ap.add_argument("--seed", default=0, type=int)
-    ap.add_argument("--lr", default=0.001, type=float)
+    ap.add_argument("--vae_lr", default=0.001, type=float)
+    ap.add_argument("--adv_lr", default=0.01, type=float)
 
     # Data Processing
     ap.add_argument(
@@ -85,11 +122,15 @@ def get_args() -> argparse.Namespace:
         "--test_file_name",
         type=str,
         default="run_5.csv",
-        help="the one file that will be picked from the rest to test against."
+        help="the one file that will be picked from the rest to test against.",
     )
 
     # Misc. Logistics
-    ap.add_argument("--validation_frequency", default=1, help="Evaluation Frequency in terms of batches")
+    ap.add_argument(
+        "--validation_frequency",
+        default=1,
+        help="Evaluation Frequency in terms of batches",
+    )
 
     ap.add_argument(
         "--debug",
@@ -110,7 +151,6 @@ def get_args() -> argparse.Namespace:
         help="Whether or not to use wandb for logging",
     )
 
-
     args = ap.parse_args()
 
     if not os.path.exists(".cache/"):
@@ -118,10 +158,11 @@ def get_args() -> argparse.Namespace:
     return args
     # Sanity check
 
+
 def plot_training_losses(recon_losses: list, adv_losses: list, fig_savedest: str):
     os.makedirs(os.path.dirname(fig_savedest), exist_ok=True)
     logger.info("Plotting the training losses")
-    _, axs = plt.subplots(2, 1,  figsize=(16,10))
+    _, axs = plt.subplots(2, 1, figsize=(16, 10))
     plt.tight_layout()
     axs[0].plot(recon_losses)
     axs[0].set_title("Reconstruction Loss")
@@ -131,10 +172,11 @@ def plot_training_losses(recon_losses: list, adv_losses: list, fig_savedest: str
     plt.savefig(fig_savedest)
     plt.close()
 
+
 def plot_single_loss(single_loss: list, title: str, fig_savedest: str):
     os.makedirs(os.path.dirname(fig_savedest), exist_ok=True)
     logger.info(f"Saving figure to {fig_savedest}")
-    _, axs = plt.subplots(1,1, figsize=(16, 8))
+    _, axs = plt.subplots(1, 1, figsize=(16, 8))
     plt.tight_layout()
     axs.plot(single_loss)
     axs.set_title(title)
@@ -165,6 +207,7 @@ def triv_calculate_validation_metrics(
 
     return validation_metrics
 
+
 def baseline_trivial_correlation(
     all_train_seqs: torch.Tensor,
     all_valid_seqs: torch.Tensor,
@@ -175,13 +218,15 @@ def baseline_trivial_correlation(
     device: torch.device,
 ):
     """
-    Will try to remove a column and simply try to predict it out of the other ones. 
+    Will try to remove a column and simply try to predict it out of the other ones.
     """
-    pub_features_idxs  = list(set(range(all_train_seqs.shape[-1])) - set(prv_features_idxs))
+    pub_features_idxs = list(
+        set(range(all_train_seqs.shape[-1])) - set(prv_features_idxs)
+    )
 
     # Shuffle, Batch, Torch Coversion, Feature Separation
-    train_pub = all_train_seqs[:,:,pub_features_idxs]
-    train_prv = all_train_seqs[:,:,prv_features_idxs]
+    train_pub = all_train_seqs[:, :, pub_features_idxs]
+    train_prv = all_train_seqs[:, :, prv_features_idxs]
 
     trivial_adversary = TrivialTemporalAdversary(
         num_pub_features=len(pub_features_idxs),
@@ -209,7 +254,9 @@ def baseline_trivial_correlation(
             adversary_guess_flat = trivial_adversary(batch_pub)
 
             # Check on performance
-            batch_y_flat = batch_prv[:,-1,:].view(-1, batch_prv.shape[-1]) # Grab only last in sequeence
+            batch_y_flat = batch_prv[:, -1, :].view(
+                -1, batch_prv.shape[-1]
+            )  # Grab only last in sequeence
             adv_train_loss = F.mse_loss(adversary_guess_flat, batch_y_flat)
             trivial_adversary.zero_grad()
             adv_train_loss.backward()
@@ -217,24 +264,23 @@ def baseline_trivial_correlation(
 
             adv_losses.append(adv_train_loss.item())
 
-
             if wandb_on:
-                wandb.log({
-                    "triv_adv_train_loss": adv_train_loss.item(),
-                })
+                wandb.log(
+                    {
+                        "triv_adv_train_loss": adv_train_loss.item(),
+                    }
+                )
 
             if batch_no % 16 == 0:
                 # TODO: Finish the validation implementaion with correlation
                 # - Log the validation metrics here
                 trivial_adversary.eval()
                 with torch.no_grad():
-                    validation_metrics = (
-                        triv_calculate_validation_metrics(
-                            all_valid_seqs,
-                            pub_features_idxs,
-                            prv_features_idxs,
-                            trivial_adversary,
-                        )
+                    validation_metrics = triv_calculate_validation_metrics(
+                        all_valid_seqs,
+                        pub_features_idxs,
+                        prv_features_idxs,
+                        trivial_adversary,
                     )
                 trivial_adversary.train()
 
@@ -270,13 +316,13 @@ def main():
 
     # Separate them into their splits (and also interpolate)
     train_seqs, val_seqs, test_file = split_defacto_runs(
-        run_dict = runs_dict,
-        train_split = args.splits["train_split"],
-        test_file_name = args.test_file_name,
-        val_split = args.splits["val_split"],
-        seq_length = args.episode_length,
-        oversample_coefficient = args.oversample_coefficient, # Scale
-        scale = True
+        run_dict=runs_dict,
+        train_split=args.splits["train_split"],
+        test_file_name=args.test_file_name,
+        val_split=args.splits["val_split"],
+        seq_length=args.episode_length,
+        oversample_coefficient=args.oversample_coefficient,  # Scale
+        scale=True,
     )
 
     logger.info(f"Using device is {device}")
@@ -292,11 +338,11 @@ def main():
 
     print(f"Shape of all_train_seqs is {all_train_seqs.shape}")
     print(f"Shape of test_file is {test_file.shape}")
-    non_0_idxs = [0,3,4,5,6,7,8,9,10,11,12,13,14,15]
-    test_file = test_file[:,non_0_idxs]
-    all_train_seqs = all_train_seqs[:,:,non_0_idxs]
-    all_valid_seqs = all_valid_seqs[:,:,non_0_idxs]
-    
+    non_0_idxs = [0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    test_file = test_file[:, non_0_idxs]
+    all_train_seqs = all_train_seqs[:, :, non_0_idxs]
+    all_valid_seqs = all_valid_seqs[:, :, non_0_idxs]
+
     # Shuffle, Batch, Torch Coversion, Feature Separation
     np.random.shuffle(all_train_seqs)
     np.random.shuffle(all_valid_seqs)
@@ -315,27 +361,23 @@ def main():
     s2one_input_size = num_columns
     # TODO: Get the model going
     model_vae = SequenceToOneVectorGeneral(
-        s2one_input_size = s2one_input_size,
-        num_sanitized_features = num_public_cols,
-        vae_latent_output_size = args.vae_latent_output_size,
+        s2one_input_size=s2one_input_size,
+        num_sanitized_features=num_public_cols,
+        vae_latent_output_size=args.vae_latent_output_size,
         vae_hidden_size=args.vae_hidden_size,
-        seq_processor_type = "lstm",  # Options: "lstm", "bilstm", "transformer"
-        rnn_num_layers = args.rnn_num_layers, 
-        rnn_hidden_size = args.rnn_hidden_size, 
-        transformer_num_heads = args.transformer_num_heads,
-        transformer_num_layers = args.transformer_num_layers, 
-        transformer_dropout = args.transformer_dropout, 
-        max_seq_length = args.episode_length, 
+        seq_processor_type="lstm",  # Options: "lstm", "bilstm", "transformer"
+        rnn_num_layers=args.rnn_num_layers,
+        rnn_hidden_size=args.rnn_hidden_size,
+        transformer_num_heads=args.transformer_num_heads,
+        transformer_num_layers=args.transformer_num_layers,
+        transformer_dropout=args.transformer_dropout,
+        max_seq_length=args.episode_length,
     ).to(device)
-    # Old, simple model
-    # model_vae = SequenceToScalarVAE(
-    #     input_size=vae_input_size,
-    #     num_sanitized_features=num_public_cols,
-    #     latent_size=args.vae_latent_size,
-    #     hidden_size=args.vae_hidden_size,
-    #     rnn_num_layers=args.rnn_num_layers,
-    #     rnn_hidden_size=args.rnn_hidden_size,
-    # ).to(device)
+    model_adversary = Adversary(
+        input_size=args.vae_latent_output_size,
+        hidden_size=args.vae_hidden_size,
+        num_classes=num_private_cols,
+    ).to(device)
 
     ########################################
     # Training VAE and Adversary
@@ -343,19 +385,24 @@ def main():
     logger.info("Starting the VAE Training")
 
     # Get the optimziers
-    opt_vae = torch.optim.Adam(model_vae.parameters(), lr=args.lr)  # type: ignore
+    opt_vae = torch.optim.Adam(model_vae.parameters(), lr=args.vae_lr)  # type: ignore
+    opt_adv = torch.optim.Adam(model_adversary.parameters(), lr=args.adv_lr) # type:ignore
 
-    model_vae, recon_losses = simple_vae_reconstruction_training(
-        batch_size = args.batch_size,
-        priv_columns = args.cols_to_hide,
-        all_train_seqs = all_train_seqs,
-        all_validation_seqs = all_valid_seqs,
-        epochs = args.epochs,
-        model_vae = model_vae,
-        optimizer_vae = opt_vae,
-        kl_dig_hypr = args.kl_dig_hypr,
-        wandb_on = args.wandb_on,
-        validate_every_n_batches=args.validation_frequency
+    model_vae, recon_losses = train_vae_and_adversary_bi_level(
+        batch_size=args.batch_size,
+        priv_columns=args.cols_to_hide,
+        all_train_seqs=all_train_seqs,
+        all_validation_seqs=all_valid_seqs,
+        epochs=args.epochs,
+        model_vae=model_vae,
+        model_adversary=model_adversary,
+        adv_train_subepochs=args.adversary_epochs,
+        adv_epoch_subsample_percent=args.adv_epoch_subsample_percent,
+        optimizer_vae=opt_vae,
+        optimizer_adv=opt_adv,
+        kl_dig_hypr=args.kl_dig_hypr,
+        wandb_on=args.wandb_on,
+        validate_every_n_batches=args.validation_frequency,
     )
 
     metrics = nonAdvVAE_test_file(
@@ -365,7 +412,7 @@ def main():
         args.episode_length,
         args.path_data_dumps,
         args.path_figure_dumps,
-        batch_size = args.batch_size
+        batch_size=args.batch_size,
     )
 
     ########################################
@@ -374,9 +421,7 @@ def main():
 
     # TODO: PLot recon losses
     if wandb_on:
-        wandb.log({
-            "recon_losses":  recon_losses
-        })
+        wandb.log({"recon_losses": recon_losses})
     logger.info(f"Validation Metrics are {metrics}")
 
     ########################################
@@ -384,26 +429,31 @@ def main():
     #
     # Training Trivial Adversary
     ########################################
-    trivial_adverary, adv_losses = baseline_trivial_correlation(
-        all_train_seqs,
-        all_valid_seqs,
-        args.cols_to_hide,
-        args.batch_size,
-        args.epochs,
-        args.lr,
-        device,
-    )
-    plot_single_loss(adv_losses, "Trivial Adversary Losses", "./figures/new_data_vae/trivial-adv_losses.png")
-    triv_test_entire_file(
-        test_file,
-        args.cols_to_hide,
-        trivial_adverary,
-        args.episode_length,
-        # args.padding_value, # WE NO LONGER USE padding_value
-        None, 
-        args.batch_size,
-        wandb_on=args.wandb_on
-    )
+    # trivial_adverary, adv_losses = baseline_trivial_correlation(
+    #     all_train_seqs,
+    #     all_valid_seqs,
+    #     args.cols_to_hide,
+    #     args.batch_size,
+    #     args.epochs,
+    #     args.lr,
+    #     device,
+    # )
+    # plot_single_loss(
+    #     adv_losses,
+    #     "Trivial Adversary Losses",
+    #     "./figures/new_data_vae/trivial-adv_losses.png",
+    # )
+    # triv_test_entire_file(
+    #     test_file,
+    #     args.cols_to_hide,
+    #     trivial_adverary,
+    #     args.episode_length,
+    #     # args.padding_value, # WE NO LONGER USE padding_value
+    #     None,
+    #     args.batch_size,
+    #     wandb_on=args.wandb_on,
+    # )
+
     # Need to see this
     # privacy, utility = get_tradeoff_metrics(
     #     test_file,
@@ -417,8 +467,6 @@ def main():
     # )
 
 
-
 if __name__ == "__main__":
     logger = create_logger("main_vae")
     main()
-
