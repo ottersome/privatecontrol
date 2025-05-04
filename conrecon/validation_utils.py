@@ -31,10 +31,10 @@ def validate_vae_recon(
             batch_pub = all_valid_seqs[batch_offset: cur_batch_end, : , pub_columns]
 
             # Then we copy this and shot it to the other ones
-            print(f"Size of `batch_puv`: {batch_pub.shape}")
-            print(f"Size of `batch_all`: {batch_all.shape}")
+            # print(f"Size of `batch_puv`: {batch_pub.shape}")
+            # print(f"Size of `batch_all`: {batch_all.shape}")
             _, reconstruted_data, _ = model_vae(batch_all[:,:-1,:])
-            print(f"Size of `reconstruted_data`: {reconstruted_data.shape}")
+            # print(f"Size of `reconstruted_data`: {reconstruted_data.shape}")
             # Evaluate
             validation_loss = F.mse_loss(batch_pub[:,-1,:], reconstruted_data)
             validation_loss_scalar = validation_loss.mean()

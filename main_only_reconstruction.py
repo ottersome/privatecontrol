@@ -18,7 +18,7 @@ import wandb
 
 from conrecon.data.data_loading import load_defacto_data, split_defacto_runs
 from conrecon.dplearning.adversaries import Adversary, TrivialTemporalAdversary
-from conrecon.dplearning.vae import SequenceToScalarVAE
+from conrecon.dplearning.vae import SequenceToOneVectorGeneral
 from conrecon.utils.common import create_logger, set_seeds
 from conrecon.performance_test_functions import get_tradeoff_metrics, advVae_test_file, nonAdvVAE_test_file, triv_test_entire_file
 
@@ -57,15 +57,18 @@ def get_args() -> argparse.Namespace:
         default=[5-2],#NOTE: When you work with this code, keep in mind this hardcoded displacement for the private column
         help="Which are the columsn we want no information of",
     )  # Remember 0-index (so 5th)
-    ap.add_argument("--vae_latent_size", default=64, type=int)
+    ap.add_argument("--vae_latent_output_size", default=64, type=int)
+    ap.add_argument("--vae_hidden_size", default=128, type=int)
     ap.add_argument("--episode_length", default=32, type=int)
-    ap.add_argument("--vae_hidden_size", default=64, type=int)
     ap.add_argument(
         "--splits",
         default={"train_split": 0.8, "val_split": 0.2, "test_split": 0.0},
         type=list,
         nargs="+",
     )
+    ap.add_argument("--transformer_num_heads", default=3, type=int, help="Number of Transformer Heads")
+    ap.add_argument("--transformer_num_layers", default=3, type=int, help="Number of Tranfomer Layers")
+    ap.add_argument("--transformer_dropout", default=0.1, type=float, help="Dropout for transformer")
     # ap.add_argument("--kl_dig_hypr", "-k", default=0.001, type=float)
     ap.add_argument("--kl_dig_hypr", "-k", default=0.9674820321116988, type=float)
     ap.add_argument("--seed", default=0, type=int)
@@ -309,16 +312,30 @@ def main():
     ########################################
     # Setup up the models
     ########################################
-    vae_input_size = num_columns
+    s2one_input_size = num_columns
     # TODO: Get the model going
-    model_vae = SequenceToScalarVAE(
-        input_size=vae_input_size,
-        num_sanitized_features=num_public_cols,
-        latent_size=args.vae_latent_size,
-        hidden_size=args.vae_hidden_size,
-        rnn_num_layers=args.rnn_num_layers,
-        rnn_hidden_size=args.rnn_hidden_size,
+    model_vae = SequenceToOneVectorGeneral(
+        s2one_input_size = s2one_input_size,
+        num_sanitized_features = num_public_cols,
+        vae_latent_output_size = args.vae_latent_output_size,
+        vae_hidden_size=args.vae_hidden_size,
+        seq_processor_type = "lstm",  # Options: "lstm", "bilstm", "transformer"
+        rnn_num_layers = args.rnn_num_layers, 
+        rnn_hidden_size = args.rnn_hidden_size, 
+        transformer_num_heads = args.transformer_num_heads,
+        transformer_num_layers = args.transformer_num_layers, 
+        transformer_dropout = args.transformer_dropout, 
+        max_seq_length = args.episode_length, 
     ).to(device)
+    # Old, simple model
+    # model_vae = SequenceToScalarVAE(
+    #     input_size=vae_input_size,
+    #     num_sanitized_features=num_public_cols,
+    #     latent_size=args.vae_latent_size,
+    #     hidden_size=args.vae_hidden_size,
+    #     rnn_num_layers=args.rnn_num_layers,
+    #     rnn_hidden_size=args.rnn_hidden_size,
+    # ).to(device)
 
     ########################################
     # Training VAE and Adversary
@@ -346,9 +363,9 @@ def main():
         args.cols_to_hide,
         model_vae,
         args.episode_length,
-        args.dump_path_data_results,
-        args.path_figure_dumps,
         args.path_data_dumps,
+        args.path_figure_dumps,
+        batch_size = args.batch_size
     )
 
     ########################################
@@ -385,7 +402,7 @@ def main():
         # args.padding_value, # WE NO LONGER USE padding_value
         None, 
         args.batch_size,
-        wandb_on=args.wandb
+        wandb_on=args.wandb_on
     )
     # Need to see this
     # privacy, utility = get_tradeoff_metrics(
@@ -398,7 +415,6 @@ def main():
     #     None,
     #     args.batch_size,
     # )
-    logger.info(f"Final Validation Metrics are privacy: {privacy}, privacy: {utility}")
 
 
 

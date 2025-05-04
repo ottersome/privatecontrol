@@ -18,7 +18,7 @@ from conrecon.dplearning.adversaries import (
     TrivialTemporalAdversary,
     PCATemporalAdversary,
 )
-from conrecon.dplearning.vae import SequenceToScalarVAE
+from conrecon.dplearning.vae import SequenceToOneVectorSimple, SequenceToOneVectorGeneral
 from conrecon.plotting import TrainLayout
 from conrecon.utils.common import create_logger
 from conrecon.validation_functions import calculate_validation_metrics
@@ -39,7 +39,7 @@ def train_vae_and_adversary(
     ds_train: Dict[str, np.ndarray],
     ds_val: Dict[str, np.ndarray],
     epochs: int,
-    model_vae: SequenceToScalarVAE,
+    model_vae: SequenceToOneVectorSimple,
     model_adversary: Adversary,
     learning_rate: float,
     kl_dig_hypr: float,

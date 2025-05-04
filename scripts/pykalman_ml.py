@@ -400,8 +400,6 @@ def train_VAE(
 
     actual_train_data = training_data[: int(len(training_data) * train_test_split)]
     actual_test_data = training_data[int(len(training_data) * train_test_split) :]
-    logger.info(f"Size of actual train data is {actual_train_data.shape}")
-    logger.info(f"Size of actual test data is {actual_test_data.shape}")
     # Setup the optimizer
     loss_fn = nn.MSELoss()
     optim = torch.optim.Adam(vae.parameters(), lr=lr) # type: ignore

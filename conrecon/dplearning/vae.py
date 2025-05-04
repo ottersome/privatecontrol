@@ -448,7 +448,7 @@ class RecurrentVAE(nn.Module):
         z = self.reparameterize(mu, sigma)
         return self.decode(z)
 
-class SequenceToOneVector(nn.Module):
+class SequenceToOneVectorSimple(nn.Module):
 
     # ADVERSARY_SOURCE = "DECODED" # For taking decoded output
     ADVERSARY_SOURCE = "LATENT" # For using latent features
@@ -462,7 +462,7 @@ class SequenceToOneVector(nn.Module):
         rnn_num_layers: int = 1,
         rnn_hidden_size: int = 32,
     ):
-        super(SequenceToOneVector, self).__init__()
+        super(SequenceToOneVectorSimple, self).__init__()
 
         # This one will have a RNN For encodeing the state data
         self.path_encoder = nn.LSTM(
@@ -613,7 +613,7 @@ class TransformerEncoder(nn.Module):
         return output
 
 
-class SequenceToOneVector(nn.Module):
+class SequenceToOneVectorGeneral(nn.Module):
     """
     A VAE that encodes a sequence to a single vector representation.
     Supports multiple sequence processing architectures: LSTM, BiLSTM, or Transformer.
@@ -628,23 +628,23 @@ class SequenceToOneVector(nn.Module):
 
     def __init__(
         self,
-        input_size: int,
+        s2one_input_size: int,
         num_sanitized_features: int,
-        latent_size: int,
-        hidden_size: int,
-        seq_processor_type: str = "lstm",  # Options: "lstm", "bilstm", "transformer"
-        rnn_num_layers: int = 1,
-        rnn_hidden_size: int = 32,
+        vae_latent_output_size: int,
+        vae_hidden_size: int,
+        seq_processor_type: str,  # Options: "lstm", "bilstm", "transformer"
+        rnn_num_layers: int,
+        rnn_hidden_size: int,
         transformer_num_heads: int = 4,
         transformer_num_layers: int = 2,
         transformer_dropout: float = 0.1,
         max_seq_length: int = 1000,
     ):
-        super(SequenceToOneVector, self).__init__()
+        super(SequenceToOneVectorGeneral, self).__init__()
         
-        self.input_size = input_size
-        self.latent_size = latent_size
-        self.hidden_size = hidden_size
+        self.input_size = s2one_input_size
+        self.latent_size = vae_latent_output_size
+        self.hidden_size = vae_hidden_size
         self.num_sanitized_features = num_sanitized_features
         self.seq_processor_type = seq_processor_type.lower()
         self.logger = create_logger(__class__.__name__)
@@ -658,7 +658,7 @@ class SequenceToOneVector(nn.Module):
         # Initialize the appropriate sequence processor
         if self.seq_processor_type == self.PROCESSOR_LSTM:
             self.seq_processor = nn.LSTM(
-                input_size=input_size,
+                input_size=s2one_input_size,
                 hidden_size=rnn_hidden_size,
                 num_layers=rnn_num_layers,
                 batch_first=True,
@@ -667,7 +667,7 @@ class SequenceToOneVector(nn.Module):
         
         elif self.seq_processor_type == self.PROCESSOR_BILSTM:
             self.seq_processor = nn.LSTM(
-                input_size=input_size,
+                input_size=s2one_input_size,
                 hidden_size=rnn_hidden_size,
                 num_layers=rnn_num_layers,
                 batch_first=True,
@@ -677,7 +677,7 @@ class SequenceToOneVector(nn.Module):
         
         elif self.seq_processor_type == self.PROCESSOR_TRANSFORMER:
             self.seq_processor = TransformerEncoder(
-                input_size=input_size,
+                input_size=s2one_input_size,
                 hidden_size=rnn_hidden_size,
                 num_layers=transformer_num_layers,
                 num_heads=transformer_num_heads,
@@ -691,13 +691,13 @@ class SequenceToOneVector(nn.Module):
                             f"Supported types: {self.PROCESSOR_LSTM}, {self.PROCESSOR_BILSTM}, {self.PROCESSOR_TRANSFORMER}")
         
         # VAE encoder components
-        self.fc1 = nn.Linear(seq_processor_output_size, hidden_size)
-        self.fc21 = nn.Linear(hidden_size, latent_size)  # mu
-        self.fc22 = nn.Linear(hidden_size, latent_size)  # logvar
+        self.vae_encoder_fc1 = nn.Linear(seq_processor_output_size, vae_hidden_size)
+        self.vae_encoder_fc21 = nn.Linear(vae_hidden_size, vae_latent_output_size)  # mu
+        self.vae_encoder_fc22 = nn.Linear(vae_hidden_size, vae_latent_output_size)  # logvar
         
         # VAE decoder components
-        self.fc3 = nn.Linear(latent_size, hidden_size)
-        self.fc4 = nn.Linear(hidden_size, num_sanitized_features)
+        self.vae_decoder_fc1 = nn.Linear(vae_latent_output_size, vae_hidden_size)
+        self.vae_decoder_fc2 = nn.Linear(vae_hidden_size, num_sanitized_features)
         
         self.relu = nn.ReLU()
 
@@ -720,8 +720,8 @@ class SequenceToOneVector(nn.Module):
             raise ValueError(f"Shape of x is {x.shape} and its type is {type(x)}")
 
         self.logger.debug(f"Shape of x is {x.shape} and its type is {type(x)}")
-        h1 = F.relu(self.fc1(reshaped_x))
-        return self.fc21(h1), self.fc22(h1)
+        h1 = F.relu(self.vae_encoder_fc1(reshaped_x))
+        return self.vae_encoder_fc21(h1), self.vae_encoder_fc22(h1)
 
     def reparameterize(self, mu, logvar) -> torch.Tensor:
         """
@@ -749,14 +749,14 @@ class SequenceToOneVector(nn.Module):
         Returns:
             Reconstructed output
         """
-        h3 = F.relu(self.fc3(z))
-        return self.fc4(h3)
+        h3 = F.relu(self.vae_decoder_fc1(z))
+        return self.vae_decoder_fc2(h3)
 
     def _process_sequence_lstm(self, x):
         """Process sequence with LSTM and return the final hidden state."""
         output, (hn, cn) = self.seq_processor(x)
         # Use the last output from the sequence
-        return output[:, -1, :]
+        return output[:, -1, :] # <- We are still using the last bit 
     
     def _process_sequence_bilstm(self, x):
         """Process sequence with BiLSTM and return the final hidden state."""

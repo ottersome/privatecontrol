@@ -220,12 +220,12 @@ def pca_test_entire_file(
 
 def nonAdvVAE_test_file(
     test_file: np.ndarray,
-    idxs_colsToGuess: Sequence[int],
+    idxs_ignoredCols: Sequence[int],
     model_vae: nn.Module,
     sequence_length: int,
     dump_path_data_results: str,
     dump_path_figures: str,
-    batch_size: int = 16,
+    batch_size: int,
 ) -> Dict[str, float]:
     """
     Will run a visualized test iteration for the passed model
@@ -281,29 +281,30 @@ def nonAdvVAE_test_file(
     tosave_sanitized = seq_sanitized.cpu().numpy()
     tosave_latent_zs = seq_latent_zs.cpu().numpy()
     os.makedirs("./results/", exist_ok=True)
-    np.save(os.path.join(dump_path_data_results,f"val_x_{idxs_colsToGuess}.npy"), tosave_val_x)
-    np.save(os.path.join(dump_path_data_results,f"sanitized_x_{idxs_colsToGuess}.npy"), tosave_sanitized)
-    np.save(os.path.join(dump_path_data_results,f"latent_z_{idxs_colsToGuess}.npy"), tosave_latent_zs)
+    np.save(os.path.join(dump_path_data_results,f"val_x_{idxs_ignoredCols}.npy"), tosave_val_x)
+    np.save(os.path.join(dump_path_data_results,f"sanitized_x_{idxs_ignoredCols}.npy"), tosave_sanitized)
+    np.save(os.path.join(dump_path_data_results,f"latent_z_{idxs_ignoredCols}.npy"), tosave_latent_zs)
 
     ########################################
     # Chart For Reconstruction
     ########################################
 
     recon_to_show = seq_sanitized
-    truth_to_compare = torch.from_numpy(test_file[evaluation_initial_offset:])
-    pub_features_idxs = list(set(range(test_file.shape[-1])) - set(idxs_colsToGuess))
+    truth_to_compare = torch.from_numpy(test_file[evaluation_initial_offset:]).to(model_device)
+    # pub_features_idxs = list(set(range(test_file.shape[-1])) - set(idxs_colsToGuess))
     path_to_save_fig = os.path.join(dump_path_figures, "vae_pure_recon.png")
     assert (
-        truth_to_compare.shape == recon_to_show.shape
+        truth_to_compare.shape[0] == recon_to_show.shape[0]
     ), f"Shape mismatch: truth_to_compare.shape is {truth_to_compare.shape} and recon_to_show.shape is {recon_to_show.shape}"
 
-    metrics["recon_loss"] = F.mse_loss(truth_to_compare, recon_to_show).item()
+    public_cols = list(set(range(truth_to_compare.shape[-1])) - set(idxs_ignoredCols))
+    metrics["recon_loss"] = F.mse_loss(truth_to_compare[:, public_cols], recon_to_show).item()
 
 
     plot_comp(
-        truth_to_compare,
+        truth_to_compare.cpu(),
         recon_to_show.cpu(),
-        pub_features_idxs,
+        idxs_ignoredCols,
         path_to_save_fig
     )
 
