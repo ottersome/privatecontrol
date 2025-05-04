@@ -114,21 +114,7 @@ def main():
         debugpy.listen(("0.0.0.0", args.debug_port))
         debugpy.wait_for_client()
 
-    # TODO: Make it  so that generate_dataset checks if params are the same
-    columns, runs_dict, _ = load_defacto_data(args.defacto_data_raw_path)
-    num_columns = len(columns)
-    num_private_cols = len(args.cols_to_hide)
-    num_public_cols = num_columns - num_private_cols
 
-    # Separate them into their splits (and also interpolate)
-    train_seqs, val_seqs, test_file = split_defacto_runs(
-        runs_dict,
-        args.splits["train_split"],
-        args.splits["val_split"],
-        args.episode_length,
-        args.train_val_data_sample_coeff,
-        True, # Scale
-    )
 
     ########################################
     # Hyperparemters

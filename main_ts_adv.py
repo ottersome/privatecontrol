@@ -6,6 +6,7 @@ from typing import Dict
 import debugpy
 import matplotlib.pyplot as plt
 import numpy as np
+from sympy import num_digits
 import torch
 from rich import traceback
 from rich.console import Console
@@ -304,39 +305,29 @@ def baseline_trivial_correlation(
                     wandb.log(validation_metrics)
     return trivial_adversary, adv_losses
 
-
-def main():
-    args = get_args()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    set_seeds(args.seed)
-    logger = create_logger("main_training")
-
-    if args.wandb_on:
-        wandb.init(project="private_control_pure_vae", config=vars(args))
-
-    if args.debug:
-        logger.info("\033[1;33m Waiting for debugger to attach...\033[0m")
-        debugpy.listen(("0.0.0.0", args.debug_port))
-        debugpy.wait_for_client()
-
+def main_data_prep(
+    cols_to_hide: list[str],
+    defacto_data_raw_path: str,
+    device: torch.device,
+    episode_length: int,
+    oversample_coefficient: float,
+    splits: dict[str, float],
+    test_file_name: str,
+) -> tuple[torch.Tensor, torch.Tensor, np.ndarray]:
     ########################################
     # Data Loading
     ########################################
     # Get a dictionary where each key is a run/file and each value is the data for that run
-    runs_dict, columns = load_defacto_data(args.defacto_data_raw_path)
-
-    # DEBUG: remove this afterwards
-    file_names = "\n".join([f"\t-{file_name}" for file_name in runs_dict.keys()])
-    print(f"Show me all files being used:\n {file_names}")
+    runs_dict, columns = load_defacto_data(defacto_data_raw_path)
 
     # Separate them into their splits (and also interpolate)
     train_seqs, val_seqs, test_file = split_defacto_runs(
         run_dict=runs_dict,
-        train_split=args.splits["train_split"],
-        test_file_name=args.test_file_name,
-        val_split=args.splits["val_split"],
-        seq_length=args.episode_length,
-        oversample_coefficient=args.oversample_coefficient,  # Scale
+        train_split=splits["train_split"],
+        test_file_name=test_file_name,
+        val_split=splits["val_split"],
+        seq_length=episode_length,
+        oversample_coefficient=oversample_coefficient,  # Scale
         scale=True,
     )
 
@@ -366,62 +357,168 @@ def main():
 
     num_columns = all_train_seqs.shape[-1]
     print(f"num_columns is {num_columns}")
-    num_private_cols = len(args.cols_to_hide)
+    num_private_cols = len(cols_to_hide)
     num_public_cols = num_columns - num_private_cols
     print(f"num_public_cols is {num_public_cols}")
 
+    return all_train_seqs, all_valid_seqs, test_file
+
+def main_model_loading(
+    adv_lr: float,
+    device: torch.device,
+    episode_length: int,
+    num_columns: int,
+    num_private_cols: int,
+    num_public_cols: int,
+    rnn_hidden_size: int,
+    rnn_num_layers: int,
+    transformer_dropout: float, 
+    transformer_num_heads: int,
+    transformer_num_layers: int,
+    vae_hidden_size: int,
+    vae_latent_output_size: int,
+    vae_lr: float,
+):
     ########################################
     # Setup up the models
     ########################################
+    logger.info("Loading the models and optimizers..")
     s2one_input_size = num_columns
     # TODO: Get the model going
     model_vae = SequenceToOneVectorGeneral(
         s2one_input_size=s2one_input_size,
         num_sanitized_features=num_public_cols,
-        vae_latent_output_size=args.vae_latent_output_size,
-        vae_hidden_size=args.vae_hidden_size,
+        vae_latent_output_size=vae_latent_output_size,
+        vae_hidden_size=vae_hidden_size,
         seq_processor_type="lstm",  # Options: "lstm", "bilstm", "transformer"
-        rnn_num_layers=args.rnn_num_layers,
-        rnn_hidden_size=args.rnn_hidden_size,
-        transformer_num_heads=args.transformer_num_heads,
-        transformer_num_layers=args.transformer_num_layers,
-        transformer_dropout=args.transformer_dropout,
-        max_seq_length=args.episode_length,
+        rnn_num_layers=rnn_num_layers,
+        rnn_hidden_size=rnn_hidden_size,
+        transformer_num_heads=transformer_num_heads,
+        transformer_num_layers=transformer_num_layers,
+        transformer_dropout=transformer_dropout,
+        max_seq_length=episode_length,
     ).to(device)
     model_adversary = Adversary(
-        input_size=args.vae_latent_output_size,
-        hidden_size=args.vae_hidden_size,
+        input_size=vae_latent_output_size,
+        hidden_size=vae_hidden_size,
         num_classes=num_private_cols,
     ).to(device)
 
     ########################################
     # Training VAE and Adversary
     ########################################
-    logger.info("Starting the VAE Training")
 
     # Get the optimziers
-    opt_vae = torch.optim.Adam(model_vae.parameters(), lr=args.vae_lr)  # type: ignore
-    opt_adv = torch.optim.Adam(model_adversary.parameters(), lr=args.adv_lr) # type:ignore
+    opt_vae = torch.optim.Adam(model_vae.parameters(), lr=vae_lr)  # type: ignore
+    opt_adv = torch.optim.Adam(model_adversary.parameters(), lr=adv_lr) # type:ignore
+
+    return model_vae, model_adversary, opt_adv, opt_vae
+
+def main_training_run(
+    adv_epoch_subsample_percent: float,
+    adversary_epochs: int,
+    all_train_seqs: torch.Tensor,
+    all_valid_seqs: torch.Tensor,
+    batch_size: int,
+    cols_to_hide: list[int],
+    epochs: int,
+    kl_dig_hypr: float,
+    model_adversary: nn.Module,
+    model_vae: nn.Module,
+    opt_adv: torch.optim.Optimizer, # type: ignore
+    opt_vae: torch.optim.Optimizer, # type: ignore
+    priv_utility_tradeoff_coeff: float,
+    validation_frequency: int,
+    wandb_on: bool,
+) -> tuple[nn.Module, list[float]]:
 
     model_vae, model_adversary, recon_losses = train_vae_and_adversary_bi_level(
-        batch_size=args.batch_size,
-        prv_columns=args.cols_to_hide,
+        batch_size=batch_size,
+        prv_columns=cols_to_hide,
         all_train_seqs=all_train_seqs,
         all_validation_seqs=all_valid_seqs,
-        epochs=args.epochs,
+        epochs=epochs,
         model_vae=model_vae,
         model_adversary=model_adversary,
-        adv_train_subepochs=args.adversary_epochs,
-        adv_epoch_subsample_percent=args.adv_epoch_subsample_percent,
+        adv_train_subepochs=adversary_epochs,
+        adv_epoch_subsample_percent=adv_epoch_subsample_percent,
         optimizer_vae=opt_vae,
         optimizer_adv=opt_adv,
-        kl_dig_hypr=args.kl_dig_hypr,
-        wandb_on=args.wandb_on,
-        priv_utility_tradeoff_coeff=args.priv_utility_tradeoff_coeff,
-        validate_every_n_batches=args.validation_frequency,
+        kl_dig_hypr=kl_dig_hypr,
+        wandb_on=wandb_on,
+        priv_utility_tradeoff_coeff=priv_utility_tradeoff_coeff,
+        validate_every_n_batches=validation_frequency,
+    )
+    return model_vae, recon_losses
+
+
+def main():
+    args = get_args()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    set_seeds(args.seed)
+    logger = create_logger("main_training")
+
+    if args.wandb_on:
+        wandb.init(project="private_control_pure_vae", config=vars(args))
+
+    if args.debug:
+        logger.info("\033[1;33m Waiting for debugger to attach...\033[0m")
+        debugpy.listen(("0.0.0.0", args.debug_port))
+        debugpy.wait_for_client()
+
+    all_train_seqs, all_valid_seqs, test_file =  main_data_prep(
+        cols_to_hide=args.cols_to_hide,
+        defacto_data_raw_path=args.defacto_data_raw_path,
+        device=device,
+        episode_length=args.episode_length,
+        oversample_coefficient=args.oversample_coefficient,
+        splits=args.splits,
+        test_file_name=args.test_file_name,
+    )
+    num_columns = all_train_seqs.shape[-1]
+    num_private_cols = len(args.cols_to_hide)
+    num_public_cols = num_columns - num_private_cols
+
+    model_vae, model_adversary, opt_adv, opt_vae = main_model_loading(
+        adv_lr=args.adv_lr,
+        device=device,
+        episode_length=args.episode_length,
+        num_columns=num_columns,
+        num_private_cols=num_private_cols,
+        num_public_cols=num_public_cols,
+        rnn_hidden_size=args.rnn_hidden_size,
+        rnn_num_layers=args.rnn_num_layers,
+        transformer_dropout=args.transformer_dropout,
+        transformer_num_heads=args.transformer_num_heads,  # type: ignore
+        transformer_num_layers=args.transformer_num_layers,  # type: ignore
+        vae_hidden_size=args.vae_hidden_size,  # type: ignore
+        vae_latent_output_size=args.vae_latent_output_size,  # type: ignore
+        vae_lr=args.vae_lr,  # type: ignore
     )
 
+    model_vae, recon_losses = main_training_run(
+        adv_epoch_subsample_percent=args.adv_epoch_subsample_percent,
+        adversary_epochs=args.adversary_epochs,
+        all_train_seqs=all_train_seqs,
+        all_valid_seqs=all_valid_seqs,
+        batch_size=args.batch_size,
+        cols_to_hide=args.cols_to_hide,
+        epochs=args.epochs,
+        kl_dig_hypr=args.kl_dig_hypr,
+        model_adversary=model_adversary,
+        model_vae=model_vae,
+        opt_adv=opt_adv,
+        opt_vae=opt_vae,
+        priv_utility_tradeoff_coeff=args.priv_utility_tradeoff_coeff,  # type: ignore
+        validation_frequency=args.validation_frequency,  # type: ignore
+        wandb_on=args.wandb_on  # type: ignore
+    )
+
+    ########################################
+    # Evaluation Time
+    ########################################
     logger.info("Running a final clean training of the adversary...")
+    num_private_cols = len(args.cols_to_hide)
     clean_model_adversary = Adversary(
         input_size=args.vae_latent_output_size,
         hidden_size=args.vae_hidden_size,
