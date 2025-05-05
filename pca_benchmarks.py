@@ -30,6 +30,7 @@ from conrecon.utils.common import (
     set_seeds,
 )
 from conrecon.utils.datatyping import PCABenchmarkResults
+from main_ts_adv import main_data_prep
 
 
 def argsies() -> argparse.Namespace:
@@ -79,6 +80,13 @@ def argsies() -> argparse.Namespace:
     )
     ap.add_argument("--device", default="cuda", type=str, help="What device to use")
     ap.add_argument("--seed", default=0, type=int, help="What device to use")
+
+    ap.add_argument(
+        "--test_file_name",
+        type=str,
+        default="run_5.csv",
+        help="the one file that will be picked from the rest to test against.",
+    )
 
     return ap.parse_args()
 
@@ -720,30 +728,42 @@ def main(args: argparse.Namespace):
     ########################################
     # Load Data
     ########################################
-    columns, runs_dict, debug_file = load_defacto_data(args.defacto_data_raw_path)
-    train_seqs, val_seqs, test_file = split_defacto_runs(
-        runs_dict,
-        args.splits["train_split"],
-        args.splits["val_split"],
-        args.episode_length,
-        args.oversample_coefficient,
-        True,  # Scale
+    # columns, runs_dict, test_file = load_defacto_data(args.defacto_data_raw_path)
+    # train_seqs, val_seqs, test_file = split_defacto_runs(
+    #     runs_dict,
+    #     args.splits["train_split"],
+    #     args.splits["val_split"],
+    #     args.episode_length,
+    #     args.oversample_coefficient,
+    #     True,  # Scale
+    # )
+    # all_train_seqs = np.concatenate([seqs for _, seqs in train_seqs.items()], axis=0)
+    #
+    # non_0_idxs = [0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    # test_file = test_file[:, non_0_idxs]
+    # all_train_seqs = all_train_seqs[:, :, non_0_idxs]
+    #
+    # num_pub_features = len(pub_features_idxs)
+    # print(f"Public features are {pub_features_idxs}")
+    # print(f"Private features are {prv_features_idxs}")
+    all_train_seqs, all_valid_seqs, test_file = main_data_prep(
+        cols_to_hide=args.cols_to_hide,
+        defacto_data_raw_path=args.defacto_data_raw_path,
+        device=device,
+        episode_length=args.episode_length,
+        oversample_coefficient=args.oversample_coefficient,
+        splits=args.splits,
+        test_file_name=args.test_file_name,
     )
-    all_train_seqs = np.concatenate([seqs for _, seqs in train_seqs.items()], axis=0)
-
-    non_0_idxs = [0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-    test_file = test_file[:, non_0_idxs]
-    all_train_seqs = all_train_seqs[:, :, non_0_idxs]
-
+    all_train_seqs = all_train_seqs.cpu().numpy()
     num_features = all_train_seqs.shape[-1]
     num_pca_components = num_features
     prv_features_idxs: list[int] = args.cols_to_hide
     pub_features_idxs = list(set(range(num_features)) - set(prv_features_idxs))
     num_pub_features = len(pub_features_idxs)
-    print(f"Public features are {pub_features_idxs}")
-    print(f"Private features are {prv_features_idxs}")
     train_pub = all_train_seqs[:, :, pub_features_idxs]
     train_prv = all_train_seqs[:, :, prv_features_idxs]
+
 
     corrs = calculate_correlation(
         train_prv.reshape((-1, train_prv.shape[-1])),
@@ -767,7 +787,7 @@ def main(args: argparse.Namespace):
     ########################################
     logger.info("Starting the PCA preprocessing")
     pca_components, pca_projected_ds, train_mean = pca_preprocessing(
-        all_train_seqs,
+        all_train_seqs
     )
 
     ########################################
@@ -819,21 +839,6 @@ def main(args: argparse.Namespace):
             f" Before method 1 pca_components shape is : {pca_components.shape}"
         )
 
-        utility, privacy = method_2_latent_spc_deco(
-            num_comps_to_remove,
-            pca_components,
-            pca_projected_ds,
-            test_file,
-            all_train_seqs,
-            prv_features_idxs,
-            train_mean,
-            args,
-            logger,
-        )
-        m1_utilities.append(utility)
-        m1_privacies.append(privacy)
-        m1_m2_uvps.append(num_comps_to_remove)
-
         # Prep data for Method 2
         if next_id_to_rm is not None:
             inv_set = list(set(range(cur_train_pub.shape[-1])) - set([next_id_to_rm]))
@@ -857,7 +862,7 @@ def main(args: argparse.Namespace):
             pub_features_idxs,
         )
 
-        next_id_to_rm, m2_utility, m2_privacy = method_1_MUI_decorrelation(
+        next_id_to_rm, m1_utility, m1_privacy = method_1_MUI_decorrelation(
             num_comps_to_remove,
             num_features,
             test_pub,
@@ -866,6 +871,24 @@ def main(args: argparse.Namespace):
             new_M_UI,
             new_M_UU,
         )
+
+        m1_utilities.append(m1_utility)
+        m1_privacies.append(m1_privacy)
+        m1_m2_uvps.append(num_comps_to_remove)
+
+        # Method 2
+        m2_utility, m2_privacy = method_2_latent_spc_deco(
+            num_comps_to_remove,
+            pca_components,
+            pca_projected_ds,
+            test_file,
+            all_train_seqs,
+            prv_features_idxs,
+            train_mean,
+            args,
+            logger,
+        )
+
         m2_utilities.append(m2_utility)
         m2_privacies.append(m2_privacy)
 

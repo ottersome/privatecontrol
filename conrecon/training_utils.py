@@ -381,10 +381,16 @@ def train_vae_and_adversary_bi_level(
             # Check on performance
             pub_recon_loss = F.mse_loss(sanitized_data, batch_pub[:, -1, :], reduction="none").mean(-1) # Guesss the set of features of sequence
             # pub_recon_norm = pub_recon_loss / (pub_recon_loss.detach() + 1e-8) TEST: Just trying normaliztion
+            # DEBUG: These two lines below and the change at final_scalar are highly experimetnal
+            gamma_priv = priv_utility_tradeoff_coeff
+            gamma_pub = 0.5
             final_loss_scalar = (
-                pub_recon_loss - priv_utility_tradeoff_coeff * adv_train_loss + kl_dig_hypr * kl_divergence # Just good ol reconstruciton to see if it works
+                gamma_pub * pub_recon_loss - gamma_priv * adv_train_loss + kl_dig_hypr * kl_divergence # Just good ol reconstruciton to see if it works
                 # pub_recon_loss + kl_dig_hypr * kl_divergence # Just good ol reconstruciton to see if it works
             ).mean()
+
+            # Check on performance
+            # torch.nn.utils.clip_grad_norm_(model_vae.parameters(), max_norm=1.0)
 
             optimizer_vae.zero_grad()
             final_loss_scalar.backward()

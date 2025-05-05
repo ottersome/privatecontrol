@@ -371,7 +371,8 @@ def split_defacto_runs(
                 run, split_percentages, seq_length, oversample_coefficient
             )
         )
-    all_across_splits.append(test_file)  # So we can scale the features
+    # This apparently, should not me done..
+    # all_across_splits.append(test_file)  # So we can scale the features
 
     all_across_splits = np.concatenate(all_across_splits)
 

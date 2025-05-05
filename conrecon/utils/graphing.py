@@ -215,6 +215,9 @@ def plot_uvps(
             f"Mismatch in {i}th_utilities vs {i}th_privacies vs {i}th_uvp_points function shape: {len(ith_utilities)} and {len(ith_privacies)} and {len(uvp_points)}"
         num_data_points = len(ith_utilities)
 
+        print(f"{i}th utilities are of shape {len(ith_utilities)}")
+        print(f"{i}th privacies are of shape {len(ith_privacies)}")
+        print(f"{i}th uvp points are of shape {len(uvp_points)}")
         left_hull_x, left_hull_y = paretto_frontier_up(np.array(ith_privacies), np.array(ith_utilities))
 
         ax.scatter(ith_privacies, ith_utilities, 
@@ -267,7 +270,7 @@ def paretto_frontier_up(
     assert len(x.shape) == 1, "x must be a 1d array"
     assert len(y.shape) == 1, "y must be a 1d array"
     assert x.shape == y.shape, "x and y must be the same shape"
-    assert x.shape[0] >= 1, "x must have more than one element"
+    assert x.shape[0] >= 3, "x must have at least three elements"
 
     # Sort the y direction
     xy = np.vstack((x, y)).transpose()

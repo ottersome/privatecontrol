@@ -124,7 +124,7 @@ def get_args() -> argparse.Namespace:
     # ap.add_argument("--kl_dig_hypr", "-k", default=0.001, type=float)
     ap.add_argument("--kl_dig_hypr", "-k", default=0.0009674820321116988, type=float)
     ap.add_argument("--seed", default=0, type=int)
-    ap.add_argument("--vae_lr", default=0.001, type=float)
+    ap.add_argument("--vae_lr", default=0.0001, type=float)
     ap.add_argument("--adv_lr", default=0.01, type=float)
 
     # Data Processing
@@ -306,7 +306,7 @@ def baseline_trivial_correlation(
     return trivial_adversary, adv_losses
 
 def main_data_prep(
-    cols_to_hide: list[str],
+    cols_to_hide: list[int],
     defacto_data_raw_path: str,
     device: torch.device,
     episode_length: int,
@@ -331,11 +331,8 @@ def main_data_prep(
         scale=True,
     )
 
-    logger.info(f"Using device is {device}")
 
     # Get Informaiton for the VAE
-    logger.debug(f"Columns are {columns}")
-    logger.debug(f"Runs dict is {runs_dict}")
 
     # Prep the data
     # Information comes packed in dictionary elements for each file. We need to mix it up a bit
@@ -382,7 +379,6 @@ def main_model_loading(
     ########################################
     # Setup up the models
     ########################################
-    logger.info("Loading the models and optimizers..")
     s2one_input_size = num_columns
     # TODO: Get the model going
     model_vae = SequenceToOneVectorGeneral(
@@ -390,7 +386,7 @@ def main_model_loading(
         num_sanitized_features=num_public_cols,
         vae_latent_output_size=vae_latent_output_size,
         vae_hidden_size=vae_hidden_size,
-        seq_processor_type="lstm",  # Options: "lstm", "bilstm", "transformer"
+        seq_processor_type="bilstm",  # Options: "lstm", "bilstm", "transformer"
         rnn_num_layers=rnn_num_layers,
         rnn_hidden_size=rnn_hidden_size,
         transformer_num_heads=transformer_num_heads,

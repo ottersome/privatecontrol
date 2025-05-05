@@ -6,6 +6,7 @@ import logging
 from matplotlib.axes import Axes
 import numpy as np
 import torch
+from torch.autograd.gradcheck import FAILED_BATCHED_GRAD_MSG_FWD_AD
 from torch.nn import functional as F
 import torch.nn as nn
 import matplotlib.pyplot as plt
@@ -423,56 +424,14 @@ def advVae_test_file(
         adv_savefig_loc
     )
 
-
-    # # Lets now save the figure
-    # permd_sanitized_idxs = torch.randperm(len(public_columns))[:8]
-    # permd_original_idxs = torch.tensor(
-    #     [public_columns[idx] for idx in permd_sanitized_idxs]
-    # ).to(torch.long)
-    #
-    # recon_to_show = seq_sanitized[:, permd_sanitized_idxs]
-    # truth_to_compare = test_file[:, permd_original_idxs]
-    # fig, axs = plt.subplots(4, 2, figsize=(32, 20))
-    # for i in range(recon_to_show.shape[1]):
-    #     mod = i % 4
-    #     idx = i // 4
-    #     axs[mod, idx].plot(
-    #         recon_to_show[:, i].squeeze().detach().cpu().numpy(), label="Reconstruction"
-    #     )
-    #     axs[mod, idx].set_title(
-    #         f"Reconstruction Vs Truth of $f_{permd_original_idxs[i]}$"
-    #     )
-    #     axs[mod, idx].legend()
-    #     axs[mod, idx].plot(truth_to_compare[:, i].squeeze(), label="Truth")
-    #     axs[mod, idx].legend()
-    #     if wandb_on:
-    #         wandb.log({f"Reconstruction (Col {i})": recon_to_show[:, i].squeeze().detach().cpu().numpy() })
-    #         wandb.log({f"Truth (Col {i})": truth_to_compare[:, i].squeeze().detach().cpu().numpy() }
-    #         )
-    # plt.savefig(recon_savefig_loc)
-    # plt.close()
-    
-    ########################################
-    # Chart for Adversary
-    ########################################
-    # adv_to_show = seq_adv_guesses[:, :]
-    # adv_truth = test_file[:, private_columns]
-    #
-    # fig = plt.figure(figsize=(16, 10))
-    # plt.plot(adv_to_show.squeeze().detach().cpu().numpy(), label="Adversary")
-    # plt.title("Adversary")
-    # plt.legend()
-    # plt.plot(adv_truth.squeeze(), label="Truth")
-    # plt.title("Truth")
-    # plt.legend()
-    #
-    # plt.savefig(adv_savefig_loc)
-    # plt.close()
-    #
-    # # Pass reconstruction and adversary to wandb
-    # if wandb_on:
-    #     wandb.log({"reconstruction": recon_to_show.squeeze().detach().cpu().numpy()})
-    #     wandb.log({"adversary": adv_to_show.squeeze().detach().cpu().numpy()})
+    # Calculate utility and privacy metrics
+    tensor_test_file = torch.from_numpy(test_file[evaluation_initial_offset:]).to(torch.float32).to(device)
+    utility_metrics = -1 * F.mse_loss(tensor_test_file[:, public_columns], seq_sanitized, reduction="none").mean()
+    privacy_metrics = F.mse_loss(tensor_test_file[:, private_columns], seq_adv_guesses, reduction="none").mean()
+    metrics = {
+        "utility": utility_metrics.item(),
+        "privacy": privacy_metrics.item(),
+    }
 
     model_vae.train()
     model_adversary.train()
@@ -486,7 +445,6 @@ def get_tradeoff_metrics(
     model_vae: nn.Module,
     model_adversary: nn.Module,
     sequence_length: int,
-    padding_value: Optional[int],
     batch_size: int = 16,
 ) -> Tuple[float, float]:
     """
@@ -525,7 +483,7 @@ def get_tradeoff_metrics(
         )  #  Sequence length to avoid padding
         end_idx = min((batch_no + 1) * batch_size + sequence_length, test_x.shape[0])
         backhistory = collect_n_sequential_batches(
-            test_x, start_idx, end_idx, sequence_length, padding_value
+            test_x, start_idx, end_idx, sequence_length
         )
         with torch.no_grad():
             latent_z, sanitized_data, kl_divergence = model_vae(backhistory)
