@@ -20,7 +20,7 @@ def argsies() -> argparse.Namespace:
     # State stuff here
     ap.add_argument(
         "--data_dir",
-        default="./results/uvp_data_2025-03-06_17-09-22",
+        default="./results/uvp_data_2025-05-05_01-49-11/",
         type=str, 
         help="Where our data is stored",
     )
@@ -44,6 +44,9 @@ def main(args: argparse.Namespace):
     vae_utilities: list[float] = np.load(os.path.join(data_dir, "utilities.npy")).tolist()
     vae_uvps = np.load(os.path.join(data_dir, "uvp.npy"))
 
+    for i,u,uvp in zip(vae_privacies, vae_utilities, vae_uvps):
+        print(f"Privacy: {i}, Utility: {u}, UVP: {uvp}")
+
     # Import PCA benchmark data
     # Load the benchmark results
     benchmarks_metrics = pickle.load(open("./results/results_benchmarks.pkl", "rb"))
@@ -65,7 +68,6 @@ def main(args: argparse.Namespace):
         all_labels,
         "figures/all_paretto.png"
     )
-
 
     exit()
 
